@@ -460,7 +460,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <div class="card">
     <div class="lbl">💬 Live captions</div>
-    <div class="scriptbox" id="live" style="font-style:normal;color:var(--txt);min-height:44px">Listening…</div>
+    <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);min-height:44px">Listening…</div>
   </div>
 
   <div class="card">
@@ -508,7 +508,7 @@ setInterval(async()=>{try{
   let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
   $('vu').style.width=p+'%';$('vupct').textContent=p+'%';
   $('cat').textContent=s.category||'auto';
-  if(s.live)$('live').textContent=s.live;
+  if(s.live)$('cap').textContent=s.live;
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
