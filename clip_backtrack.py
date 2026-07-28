@@ -254,6 +254,24 @@ def repetitive(text):
     words = text.lower().split()
     return len(words) >= 8 and len(set(words)) / len(words) < 0.35
 
+def dedup(text):
+    """Collapse consecutive repeated words/phrases (Whisper stutter: 'tricked tricked')."""
+    w = text.split()
+    out = []
+    for x in w:
+        if out and out[-1].lower() == x.lower():
+            continue
+        out.append(x)
+    # collapse an immediately repeated 2-3 word phrase (a b a b -> a b)
+    for n in (3, 2):
+        i = 0
+        while i + 2 * n <= len(out):
+            if [t.lower() for t in out[i:i + n]] == [t.lower() for t in out[i + n:i + 2 * n]]:
+                del out[i + n:i + 2 * n]
+            else:
+                i += 1
+    return " ".join(out)
+
 def boost(audio):
     """Normalize quiet audio to ~0.9 peak so Whisper doesn't hallucinate on low levels."""
     peak = float(np.max(np.abs(audio))) if audio.size else 0.0
@@ -288,7 +306,7 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
         return last_title, last_raw
     jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
     with transcribe_lock:
-        text = transcribe_long(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
+        text = dedup(transcribe_long(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}"))
     if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
         last_title, last_raw = "Awesome Stream Moment", "No clear speech"
         return last_title, last_raw
@@ -455,7 +473,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <div class="card">
     <div class="lbl">💬 Live captions</div>
-    <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);min-height:44px">Listening…</div>
+    <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);height:3em;line-height:1.5;overflow:hidden">Listening…</div>
   </div>
 
   <div class="card">
@@ -576,7 +594,7 @@ def live_loop():
                 res = transcribe(boost(audio))
             t = " ".join(res.get("text", "").split())
             if re.search(r"[a-z0-9]", t.lower()) and not repetitive(t):
-                live_text = t
+                live_text = dedup(t)
         except Exception:
             pass
 
