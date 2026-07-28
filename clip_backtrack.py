@@ -510,7 +510,14 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .cat{color:var(--blue);font-weight:700}
 </style></head><body><div class="wrap">
 
-  <div class="card row"><h1>🎬 Clip Backtrack</h1><span id="live" class="pill">● Recording</span></div>
+  <div class="card row">
+    <h1>🎬 Clip Backtrack</h1>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="live" class="pill">● Recording</span>
+      <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
+      <button class="mini" style="background:#3a1f2b;color:#f9a8c4" onclick="quitApp()">Quit</button>
+    </div>
+  </div>
 
   <div class="card" style="display:flex;gap:26px;align-items:center;padding:13px 20px;font-size:13px;color:var(--dim)">
     <span><b id="whDot" style="color:#fbbf24">●</b> Whisper MLX <span id="whTxt">…</span></span>
@@ -569,6 +576,9 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <div id="toast" class="toast">Saved</div>
 <script>
 const $=id=>document.getElementById(id);
+let paused=false;
+function togglePause(){fetch(paused?'/resume':'/pause');}
+function quitApp(){if(confirm('Quit Clip Backtrack? The menu bar app will close.')){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">Clip Backtrack stopped. You can close this tab.</p>';}}
 setInterval(async()=>{try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
@@ -579,6 +589,7 @@ setInterval(async()=>{try{
   $('whDot').style.color=s.whisper?'var(--ok)':'#fbbf24';$('whTxt').textContent=s.whisper?'ready':'loading…';
   $('olDot').style.color=s.ollama?'var(--ok)':'#f87171';$('olTxt').textContent=s.ollama?'up':'down';
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
+  paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
 }catch(e){}},150);
@@ -731,6 +742,9 @@ class Handler(BaseHTTPRequestHandler):
             globals().__setitem__("recording_paused", True); self._send(b'{"status":"paused"}')
         elif u.path == "/resume":
             globals().__setitem__("recording_paused", False); self._send(b'{"status":"recording"}')
+        elif u.path == "/quit":
+            self._send(b'{"status":"quitting"}')
+            threading.Timer(0.2, lambda: os._exit(0)).start()   # launchd KeepAlive=false → stays stopped
         else:
             self._send(b"not found", "text/plain", 404)
 
