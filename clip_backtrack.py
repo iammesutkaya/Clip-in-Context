@@ -513,7 +513,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <div class="card row">
     <h1>🎬 Clip Backtrack</h1>
     <div style="display:flex;gap:8px;align-items:center">
-      <span id="live" class="pill">● Recording</span>
+      <span id="live" class="pill">● Running</span>
       <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
       <button class="mini" style="background:#3a1f2b;color:#f9a8c4" onclick="quitApp()">Quit</button>
     </div>
@@ -588,7 +588,7 @@ setInterval(async()=>{try{
   if(s.live)$('cap').textContent=s.live;
   $('whDot').style.color=s.whisper?'var(--ok)':'#fbbf24';$('whTxt').textContent=s.whisper?'ready':'loading…';
   $('olDot').style.color=s.ollama?'var(--ok)':'#f87171';$('olTxt').textContent=s.ollama?'up':'down';
-  const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
+  const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Running';l.classList.remove('off');}
   paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
