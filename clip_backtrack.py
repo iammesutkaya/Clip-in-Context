@@ -249,6 +249,35 @@ def ai_title(raw, game=""):
 last_title = ""
 last_raw = ""
 
+def repetitive(text):
+    """True if the transcript is a hallucinated loop (few unique words repeated)."""
+    words = text.lower().split()
+    return len(words) >= 8 and len(set(words)) / len(words) < 0.35
+
+def boost(audio):
+    """Normalize quiet audio to ~0.9 peak so Whisper doesn't hallucinate on low levels."""
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    return np.clip(audio * (0.9 / peak), -1.0, 1.0).astype(np.float32) if peak > 1e-4 else audio
+
+def transcribe(audio, **kw):
+    # condition_on_previous_text=False stops the runaway "word word word…" repeat loop.
+    return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
+                                  condition_on_previous_text=False, **kw)
+
+def transcribe_long(audio, **kw):
+    """Transcribe in 5s chunks (the window that stays stable) and stitch — long
+    single-pass transcription hallucinates repeat loops on quiet stretches."""
+    step = SAMPLE_RATE * 5
+    parts = []
+    for i in range(0, audio.size, step):
+        seg = audio[i:i + step]
+        if seg.size < SAMPLE_RATE // 2 or float(np.max(np.abs(seg))) < 0.005:
+            continue
+        t = " ".join(transcribe(boost(seg), **kw).get("text", "").split())
+        if re.search(r"[a-z0-9]", t.lower()) and not repetitive(t):
+            parts.append(t)
+    return " ".join(parts)
+
 def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     """Transcribe last `duration` s → title. Returns (title, raw_transcript)."""
     global last_title, last_raw
@@ -259,10 +288,8 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
         return last_title, last_raw
     jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
     with transcribe_lock:
-        res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
-                                     initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
-    text = " ".join(res.get("text", "").split())
-    if not re.search(r"[a-z0-9]", text.lower()):   # empty or punctuation-only (silence artifact)
+        text = transcribe_long(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
+    if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
         last_title, last_raw = "Awesome Stream Moment", "No clear speech"
         return last_title, last_raw
     title = ai_title(text, game)
@@ -545,9 +572,9 @@ def live_loop():
             continue
         try:
             with transcribe_lock:
-                res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL)
+                res = transcribe(boost(audio))
             t = " ".join(res.get("text", "").split())
-            if re.search(r"[a-z0-9]", t.lower()):
+            if re.search(r"[a-z0-9]", t.lower()) and not repetitive(t):
                 live_text = t
         except Exception:
             pass
