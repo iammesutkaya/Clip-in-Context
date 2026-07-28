@@ -74,6 +74,8 @@ recording_paused = False
 mic_volume = 0.0
 live_text = ""                       # continuous live caption (title is clip-only)
 transcribe_lock = threading.Lock()   # MLX isn't reentrant; serialize live loop vs clip trigger
+whisper_ok = False                   # True once MLX has transcribed successfully
+ollama_ok = False                    # True while Ollama is reachable (health thread)
 
 class RingBuffer:
     """Fixed float32 ring buffer, last BUFFER_SECONDS seconds at 16 kHz."""
@@ -278,9 +280,30 @@ def boost(audio):
     return np.clip(audio * (0.9 / peak), -1.0, 1.0).astype(np.float32) if peak > 1e-4 else audio
 
 def transcribe(audio, **kw):
+    global whisper_ok
     # condition_on_previous_text=False stops the runaway "word word word…" repeat loop.
-    return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
-                                  condition_on_previous_text=False, **kw)
+    res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
+                                 condition_on_previous_text=False, **kw)
+    whisper_ok = True
+    return res
+
+def warmup_whisper():
+    """Load the MLX model at startup (sets status + removes first-clip latency)."""
+    try:
+        with transcribe_lock:
+            transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
+    except Exception as e:
+        print(f"⚠️ whisper warmup: {e}")
+
+def health_loop():
+    """Poll Ollama reachability for the dashboard status indicator."""
+    global ollama_ok
+    while True:
+        try:
+            ollama_ok = requests.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200
+        except Exception:
+            ollama_ok = False
+        time.sleep(5)
 
 def transcribe_long(audio, **kw):
     """Transcribe in 5s chunks (the window that stays stable) and stitch — long
@@ -472,6 +495,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <div class="card row"><h1>🎬 Clip Backtrack</h1><span id="live" class="pill">● Recording</span></div>
 
+  <div class="card" style="display:flex;gap:26px;align-items:center;padding:13px 20px;font-size:13px;color:var(--dim)">
+    <span><b id="whDot" style="color:#fbbf24">●</b> Whisper MLX <span id="whTxt">…</span></span>
+    <span><b id="olDot" style="color:#fbbf24">●</b> Ollama <span id="olTxt">…</span></span>
+  </div>
+
   <div class="card">
     <div class="lbl">💬 Live captions</div>
     <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);height:4.5em;line-height:1.5;overflow:hidden">Listening…</div>
@@ -529,6 +557,8 @@ setInterval(async()=>{try{
   {const vu=$('vu');if(vu)vu.style.height=p+'%';}
   $('cat').textContent=s.category||'auto';
   if(s.live)$('cap').textContent=s.live;
+  $('whDot').style.color=s.whisper?'var(--ok)':'#fbbf24';$('whTxt').textContent=s.whisper?'ready':'loading…';
+  $('olDot').style.color=s.ollama?'var(--ok)':'#f87171';$('olTxt').textContent=s.ollama?'up':'down';
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
@@ -603,6 +633,8 @@ def status_json():
     return {
         "mic_volume": mic_volume,
         "paused": recording_paused,
+        "whisper": whisper_ok,
+        "ollama": ollama_ok,
         "live": live_text,
         "last_title": last_title,
         "last_raw": last_raw,
@@ -761,6 +793,8 @@ if __name__ == "__main__":
     start_stream()
     threading.Thread(target=start_http, daemon=True).start()
     threading.Thread(target=live_loop, daemon=True).start()
+    threading.Thread(target=health_loop, daemon=True).start()
+    threading.Thread(target=warmup_whisper, daemon=True).start()
     print(f"READY — trigger: http://localhost:{HTTP_PORT}/clip")
     app = ClipApp()
     import AppKit  # menu-bar-only: no Dock icon (otherwise Python shows a Dock rocket)
