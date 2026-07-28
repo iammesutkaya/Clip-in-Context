@@ -454,11 +454,6 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <div class="card row"><h1>🎬 Clip Backtrack</h1><span id="live" class="pill">● Recording</span></div>
 
   <div class="card">
-    <div class="lbl">🎙️ Microphone level</div>
-    <div class="row"><div class="vu"><i id="vu"></i></div><span id="vupct" class="pct">0%</span></div>
-  </div>
-
-  <div class="card">
     <div class="lbl">💬 Live captions</div>
     <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);min-height:44px">Listening…</div>
   </div>
@@ -478,6 +473,10 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <form class="card" onsubmit="save(event)">
     <div class="lbl">🎙️ Streamer &amp; input</div>
     <label>Microphone device</label><select id="mic_device">__MIC_OPTS__</select>
+    <div class="row" style="margin-top:8px;gap:8px">
+      <div class="vu" style="height:5px;border:none;background:#1b2230"><i id="vu"></i></div>
+      <span id="vupct" style="font-size:11px;color:var(--dim);min-width:32px;text-align:right">0%</span>
+    </div>
     <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
       <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
     <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
