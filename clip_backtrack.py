@@ -473,7 +473,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <div class="card">
     <div class="lbl">💬 Live captions</div>
-    <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);height:3em;line-height:1.5;overflow:hidden">Listening…</div>
+    <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);height:4.5em;line-height:1.5;overflow:hidden">Listening…</div>
   </div>
 
   <div class="card">
