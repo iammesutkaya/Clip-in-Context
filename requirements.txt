@@ -1,0 +1,11 @@
+# Clip Backtrack Python backend
+sounddevice
+numpy
+scipy
+openai-whisper
+flask
+waitress
+requests
+# YouTube Shorts auto-upload (optional feature)
+google-api-python-client
+google-auth-oauthlib

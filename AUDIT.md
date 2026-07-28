@@ -34,18 +34,23 @@ Whisper (`scipy.signal.resample_poly` in the audio callback). Config points at
 | 6 | Footgun | YouTube auto-upload defaulted **on** + privacy **public** → a stray clip auto-publishes | Defaults now off + unlisted |
 | 7 | Dead code | `NativeMenuBarController` (~110 lines) never instantiated — Swift owns the menu bar | Removed, plus its unused `AppKit` import |
 
-## Still worth doing (not changed)
-- **Secrets in plaintext.** Google client secret + OAuth token sit in the app
-  dir and the secret is shown in a plaintext dashboard field. Move to Keychain.
-- **Two competing implementations.** `run_backtrack.py` is an older MLX-based
-  variant; the Python file also duplicates config/notify logic. Pick one.
-- **Bundled copy drift.** `Clip Backtrack.app/.../mac_clip_backtrack.py` is a
-  copy of the root file — they can silently diverge. Build step should copy, or
-  the app should point at one source.
-- **Buffer efficiency.** `AudioBuffer.get_audio_data` does `list(deque)[-n:]`
-  (full O(n) copy of up to 960k samples) every 1.5s. Fine at this scale; switch
-  to a numpy ring buffer if CPU matters.
-- **No dependency manifest.** Needs a `requirements.txt`
-  (`sounddevice numpy openai-whisper flask waitress requests google-api-python-client google-auth-oauthlib`).
-- **Profanity filter** is a tiny regex list — trivially bypassed; fine as a
-  courtesy, not brand-safety.
+## Second pass (done)
+- **Secret exposure.** Dashboard no longer echoes the OAuth client secret:
+  field is `type=password`, value never sent to the browser, `/api/settings`
+  returns only a `google_client_secret_set` bool. (Full Keychain storage
+  skipped: installed-app OAuth secrets aren't confidential and files are
+  gitignored + home-owned.)
+- **Two implementations.** Deleted `run_backtrack.py` (older MLX prototype,
+  unreferenced). `mac_clip_backtrack.py` is the single source.
+- **Bundle drift.** `build.sh` compiles the Swift binary and regenerates the
+  whole `.app` (incl. Info.plist) from source, so the bundled Python copy can't
+  diverge. The `.app` is gitignored and rebuildable.
+- **Buffer efficiency.** `AudioBuffer` is now a fixed numpy int16 ring buffer —
+  no per-sample Python objects, O(1) writes. Covered by `test_audiobuffer.py`.
+- **Dependency manifest.** Added `requirements.txt`.
+
+## Still open (intentionally not done)
+- **Profanity filter** is a tiny regex list — courtesy filter, not real brand
+  safety. Left as-is by design.
+- **Swift hardcodes** a fallback path `/Users/Mesut/Desktop/clip/...`; harmless
+  (bundle resource is primary) but not portable.

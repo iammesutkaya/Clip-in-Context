@@ -27,7 +27,6 @@ import threading
 import tempfile
 import subprocess
 import urllib.parse
-from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 
@@ -162,28 +161,47 @@ RECORDING_PAUSED = False
 menu_app_instance = None
 
 class AudioBuffer:
-    """Rolling audio buffer stored safely in RAM."""
+    """Fixed-size int16 ring buffer in RAM (no per-sample Python objects)."""
     def __init__(self, sample_rate, max_buffer_seconds):
         self.sample_rate = sample_rate
-        self.max_samples = sample_rate * max_buffer_seconds
-        self.buffer = deque(maxlen=self.max_samples)
+        self.capacity = sample_rate * max_buffer_seconds
+        self.buffer = np.zeros(self.capacity, dtype=np.int16)
+        self.write = 0      # next write position
+        self.filled = 0     # number of valid samples, capped at capacity
         self.lock = threading.Lock()
 
     def add_samples(self, samples):
         if RECORDING_PAUSED:
-            return # Skip recording when paused
+            return  # Skip recording when paused
+        samples = np.asarray(samples, dtype=np.int16)
+        n = samples.size
+        if n == 0:
+            return
+        if n >= self.capacity:          # a single block bigger than the buffer
+            samples = samples[-self.capacity:]
+            n = self.capacity
         with self.lock:
-            self.buffer.extend(samples)
+            end = self.write + n
+            if end <= self.capacity:
+                self.buffer[self.write:end] = samples
+            else:                       # wrap around
+                split = self.capacity - self.write
+                self.buffer[self.write:] = samples[:split]
+                self.buffer[:n - split] = samples[split:]
+            self.write = (self.write + n) % self.capacity
+            self.filled = min(self.capacity, self.filled + n)
 
     def get_audio_data(self, seconds=30):
-        """Returns the last N seconds of recorded audio."""
+        """Returns the last N seconds of recorded audio, oldest-to-newest."""
         with self.lock:
-            requested_samples = min(len(self.buffer), self.sample_rate * seconds)
-            if requested_samples == 0:
+            want = min(self.filled, self.sample_rate * seconds)
+            if want == 0:
                 return np.array([], dtype=np.int16)
-            # Extract last N samples
-            recent_samples = list(self.buffer)[-requested_samples:]
-            return np.array(recent_samples, dtype=np.int16)
+            start = (self.write - want) % self.capacity
+            if start + want <= self.capacity:
+                return self.buffer[start:start + want].copy()
+            split = self.capacity - start
+            return np.concatenate((self.buffer[start:], self.buffer[:want - split]))
 
 audio_buffer = AudioBuffer(SAMPLE_RATE, MAX_BUFFER_SECONDS)
 whisper_model = None
@@ -996,7 +1014,7 @@ def render_unified_dashboard(new_title=None, new_transcript=None, new_duration=N
                 </div>
                 <div class="field">
                     <label>Google OAuth Client Secret:</label>
-                    <input type="text" id="google_client_secret" name="google_client_secret" value="__GOOGLE_CLIENT_SECRET__" placeholder="GOCSPX-xxxx...">
+                    <input type="password" id="google_client_secret" name="google_client_secret" value="" placeholder="__SECRET_PLACEHOLDER__" autocomplete="off">
                 </div>
                 <div class="field">
                     <label>Upload Privacy Status:</label>
@@ -1193,7 +1211,7 @@ def render_unified_dashboard(new_title=None, new_transcript=None, new_duration=N
                    .replace("__DEFAULT_GAME__", esc(DEFAULT_GAME))\
                    .replace("__ENABLE_YT_CHECKED__", "checked" if ENABLE_YOUTUBE_UPLOAD else "")\
                    .replace("__GOOGLE_CLIENT_ID__", esc(GOOGLE_CLIENT_ID))\
-                   .replace("__GOOGLE_CLIENT_SECRET__", esc(GOOGLE_CLIENT_SECRET))\
+                   .replace("__SECRET_PLACEHOLDER__", "•••••• saved" if GOOGLE_CLIENT_SECRET else "GOCSPX-xxxx...")\
                    .replace("__PRIV_PUBLIC__", "selected" if YOUTUBE_PRIVACY_STATUS == "public" else "")\
                    .replace("__PRIV_UNLISTED__", "selected" if YOUTUBE_PRIVACY_STATUS == "unlisted" else "")\
                    .replace("__PRIV_PRIVATE__", "selected" if YOUTUBE_PRIVACY_STATUS == "private" else "")\
@@ -1319,7 +1337,7 @@ def handle_api_settings():
         "default_game": DEFAULT_GAME,
         "enable_yt": ENABLE_YOUTUBE_UPLOAD,
         "google_client_id": GOOGLE_CLIENT_ID,
-        "google_client_secret": GOOGLE_CLIENT_SECRET,
+        "google_client_secret_set": bool(GOOGLE_CLIENT_SECRET),
         "yt_privacy": YOUTUBE_PRIVACY_STATUS,
         "max_upload_kbps": MAX_UPLOAD_KBPS,
         "obs_clips_dir": OBS_CLIPS_DIR,
