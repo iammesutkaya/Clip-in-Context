@@ -10,9 +10,5 @@ __pycache__/
 venv/
 .venv/
 
-# Build output (regenerated from source)
-Clip Backtrack.app/
-ClipBacktrackExecutable
-
 # macOS
 .DS_Store

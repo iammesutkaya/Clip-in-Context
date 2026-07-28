@@ -1,11 +1,10 @@
-# Clip Backtrack Python backend
+# Clip Backtrack — single-process macOS menu-bar app (run from Terminal)
+rumps
 sounddevice
 numpy
 scipy
-openai-whisper
-flask
-waitress
+mlx-whisper
 requests
-# YouTube Shorts auto-upload (optional feature)
+# YouTube Shorts auto-upload (optional)
 google-api-python-client
 google-auth-oauthlib
