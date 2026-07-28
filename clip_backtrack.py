@@ -35,6 +35,7 @@ cfg = {
     "custom_words": [],
     "default_game": "",
     "mic_device": "Voice - Input 01",   # substring match; "" = system default
+    "ollama_model": "llama3.2",          # model for jargon + title generation
     "enable_yt": False,
     "yt_privacy": "unlisted",
     "max_upload_kbps": 1500,
@@ -175,7 +176,7 @@ def game_jargon(game):
         return _jargon[key]
     try:
         r = requests.post("http://localhost:11434/api/generate", timeout=4, json={
-            "model": "llama3.2", "stream": False, "options": {"temperature": 0.2},
+            "model": cfg["ollama_model"], "stream": False, "options": {"temperature": 0.2},
             "prompt": f"Output 15 comma-separated key characters/items/jargon for the game '{game}'. Only the words."})
         if r.status_code == 200:
             terms = [t.strip().strip('"\'') for t in r.json().get("response", "").split(",") if 0 < len(t.strip()) < 30]
@@ -224,7 +225,7 @@ def ai_title(raw, game=""):
     # Ollama
     try:
         r = requests.post("http://localhost:11434/api/generate", timeout=6, json={
-            "model": "llama3.2", "prompt": prompt, "stream": False, "options": {"temperature": 0.0}})
+            "model": cfg["ollama_model"], "prompt": prompt, "stream": False, "options": {"temperature": 0.4}})
         if r.status_code == 200:
             t = r.json().get("response", "").strip().strip('"\'')
             if t and len(t) <= MAX_TITLE_LENGTH:
@@ -237,7 +238,7 @@ def ai_title(raw, game=""):
         try:
             r = requests.post("https://api.openai.com/v1/chat/completions", timeout=6,
                 headers={"Authorization": f"Bearer {key}"},
-                json={"model": "gpt-4o-mini", "temperature": 0.0, "max_tokens": 25,
+                json={"model": "gpt-4o-mini", "temperature": 0.4, "max_tokens": 25,
                       "messages": [{"role": "user", "content": prompt}]})
             if r.status_code == 200:
                 t = r.json()["choices"][0]["message"]["content"].strip().strip('"\'')
@@ -530,6 +531,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
     <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
     <label>Default game fallback</label><input id="default_game" value="__GAME__">
+    <label>AI title model (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
 
     <div class="lbl" style="margin-top:22px">🚀 YouTube Shorts</div>
     <div class="chk"><label style="margin:0">Enable auto-upload</label><input type="checkbox" id="enable_yt" __YT__></div>
@@ -571,7 +573,7 @@ function copyTitle(){navigator.clipboard.writeText($('ttl').textContent);toast('
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
 async function save(ev){ev.preventDefault();
   const b={streamer_name:$('streamer_name').value,twitch_channel:$('twitch_channel').value,
-    mic_device:$('mic_device').value,default_game:$('default_game').value,
+    mic_device:$('mic_device').value,default_game:$('default_game').value,ollama_model:$('ollama_model').value,
     custom_words:$('custom_words').value.split(',').map(s=>s.trim()).filter(Boolean),
     enable_yt:$('enable_yt').checked,google_client_id:$('google_client_id').value,
     google_client_secret:$('google_client_secret').value,yt_privacy:$('yt_privacy').value,
@@ -585,7 +587,7 @@ def apply_settings(data):
     """Update cfg from a settings dict (web form or API). Restarts mic if changed."""
     global recording_paused
     mic_changed = "mic_device" in data and str(data["mic_device"]) != cfg["mic_device"]
-    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "yt_privacy", "obs_clips_dir"):
+    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "ollama_model", "yt_privacy", "obs_clips_dir"):
         if k in data:
             cfg[k] = str(data[k])
     if "custom_words" in data:
@@ -641,15 +643,29 @@ def status_json():
         "category": detected_game,
     }
 
+def ollama_models():
+    try:
+        r = requests.get("http://localhost:11434/api/tags", timeout=1.5)
+        if r.status_code == 200:
+            return [m["name"] for m in r.json().get("models", [])]
+    except Exception:
+        pass
+    return []
+
 def dashboard_html():
     e = lambda v: html.escape(str(v), quote=True)
     opts = "".join(
         f'<option value="{e(d["name"])}"{" selected" if cfg["mic_device"] and cfg["mic_device"].lower() in d["name"].lower() else ""}>{e(d["name"])}</option>'
         for d in input_devices()) or '<option value="">Default input</option>'
+    models = ollama_models()
+    if cfg["ollama_model"] not in models:
+        models.insert(0, cfg["ollama_model"])
+    model_opts = "".join(f'<option{" selected" if m == cfg["ollama_model"] else ""}>{e(m)}</option>' for m in models)
     repl = {
         "__STREAMER__": e(cfg["streamer_name"]), "__TWITCH__": e(cfg["twitch_channel"]),
         "__WORDS__": e(", ".join(cfg["custom_words"])), "__GAME__": e(cfg["default_game"]),
-        "__MIC_OPTS__": opts, "__OBS__": e(cfg["obs_clips_dir"]), "__KBPS__": e(cfg["max_upload_kbps"]),
+        "__MIC_OPTS__": opts, "__MODEL_OPTS__": model_opts,
+        "__OBS__": e(cfg["obs_clips_dir"]), "__KBPS__": e(cfg["max_upload_kbps"]),
         "__CID__": e(cfg["google_client_id"]),
         "__SEC_PH__": "•••••• saved" if cfg["google_client_secret"] else "GOCSPX-…",
         "__YT__": "checked" if cfg["enable_yt"] else "", "__NOTIF__": "checked" if cfg["enable_notif"] else "",
