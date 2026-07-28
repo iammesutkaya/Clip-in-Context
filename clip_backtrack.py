@@ -546,8 +546,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <div class="lbl">📌 Latest clip title</div>
     <div class="title"><span id="ttl">No clip yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
     <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
-    <div class="row" style="margin-top:14px;gap:10px">
-      <select id="dur" style="width:auto"><option value="15">15s</option><option value="30" selected>30s</option><option value="45">45s</option></select>
+    <div class="row" style="margin-top:14px;gap:10px;align-items:stretch">
+      <select id="dur" style="width:auto;padding:0 12px;font-weight:700"><option value="15">15s</option><option value="30" selected>30s</option><option value="45">45s</option></select>
       <button class="go" style="margin:0" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
     </div>
   </div>
@@ -556,7 +556,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <summary>⚙️ Settings</summary>
     <form class="setbody" onsubmit="save(event)">
       <div class="lbl">🎙️ Streamer</div>
-      <label>Microphone device</label><select id="mic_device">__MIC_OPTS__</select>
+      <label>Microphone device</label>
+      <div style="position:relative">
+        <select id="mic_device" style="padding-left:26px">__MIC_OPTS__</select>
+        <div title="Mic level" style="position:absolute;left:11px;top:0;bottom:0;margin:auto 0;width:8px;height:22px;background:#1b2230;border-radius:4px;overflow:hidden;display:flex;align-items:flex-end">
+          <i id="vu2" style="display:block;width:100%;height:0;background:linear-gradient(0deg,#10b981,#f59e0b,#ef4444);transition:height .08s linear"></i>
+        </div>
+      </div>
       <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
         <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
       <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
@@ -593,7 +599,7 @@ setInterval(async()=>{try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
   let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
-  {const vu=$('vu');if(vu)vu.style.width=p+'%';}
+  {const vu=$('vu');if(vu)vu.style.width=p+'%';const v2=$('vu2');if(v2)v2.style.height=p+'%';}
   $('cat').textContent=s.category||'auto';
   if(s.live)$('cap').textContent=s.live;
   $('whDot').style.color=s.whisper?'var(--ok)':'#fbbf24';$('whTxt').textContent=s.whisper?'ready':'loading…';
