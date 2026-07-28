@@ -508,6 +508,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     font-weight:700;transition:transform .25s;opacity:0}
   .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
   .cat{color:var(--blue);font-weight:700}
+  details.set{background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
+  details.set summary{list-style:none;cursor:pointer;padding:16px 20px;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;font-weight:700;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
+  details.set summary::-webkit-details-marker{display:none}
+  details.set summary::after{content:'⌄';font-size:15px;transition:transform .2s}
+  details.set[open] summary::after{transform:rotate(180deg)}
+  details.set .setbody{padding:0 20px 22px}
 </style></head><body><div class="wrap">
 
   <div class="card row">
@@ -519,13 +526,19 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     </div>
   </div>
 
-  <div class="card" style="display:flex;gap:26px;align-items:center;padding:13px 20px;font-size:13px;color:var(--dim)">
-    <span><b id="whDot" style="color:#fbbf24">●</b> Whisper MLX <span id="whTxt">…</span></span>
-    <span><b id="olDot" style="color:#fbbf24">●</b> Ollama <span id="olTxt">…</span></span>
+  <div class="card row" style="padding:13px 20px;font-size:13px;color:var(--dim);flex-wrap:wrap;gap:14px">
+    <span style="display:flex;gap:22px">
+      <span><b id="whDot" style="color:#fbbf24">●</b> Whisper <span id="whTxt">…</span></span>
+      <span><b id="olDot" style="color:#fbbf24">●</b> Ollama <span id="olTxt">…</span></span>
+    </span>
+    <span>🎮 <span id="cat" class="cat">…</span></span>
   </div>
 
   <div class="card">
-    <div class="lbl">💬 Live captions</div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="lbl" style="margin:0">💬 Live captions</div>
+      <div class="vu" title="Mic level" style="flex:none;width:96px;height:6px"><i id="vu"></i></div>
+    </div>
     <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);height:4.5em;line-height:1.5;overflow:hidden">Listening…</div>
   </div>
 
@@ -539,39 +552,36 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     </div>
   </div>
 
-  <div class="card row"><span class="lbl" style="margin:0">🎮 Live category</span><span id="cat" class="cat">…</span></div>
+  <details class="set">
+    <summary>⚙️ Settings</summary>
+    <form class="setbody" onsubmit="save(event)">
+      <div class="lbl">🎙️ Streamer</div>
+      <label>Microphone device</label><select id="mic_device">__MIC_OPTS__</select>
+      <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
+        <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
+      <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
+      <label>Default game fallback</label><input id="default_game" value="__GAME__">
 
-  <form class="card" onsubmit="save(event)">
-    <div class="lbl">🎙️ Streamer &amp; input</div>
-    <label>Microphone device</label>
-    <div style="position:relative">
-      <select id="mic_device" style="padding-left:26px">__MIC_OPTS__</select>
-      <div title="Mic level" style="position:absolute;left:11px;top:0;bottom:0;margin:auto 0;width:8px;height:22px;background:#1b2230;border-radius:4px;overflow:hidden;display:flex;align-items:flex-end">
-        <i id="vu" style="display:block;width:100%;height:0;background:linear-gradient(0deg,#10b981,#f59e0b,#ef4444);transition:height .08s linear"></i>
-      </div>
-    </div>
-    <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
-      <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
-    <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
-    <label>Default game fallback</label><input id="default_game" value="__GAME__">
-    <label>Transcription model (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
-    <label>AI title model (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
+      <div class="lbl" style="margin-top:24px">🧠 AI models</div>
+      <label>Transcription (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
+      <label>Title generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
 
-    <div class="lbl" style="margin-top:22px">🚀 YouTube Shorts</div>
-    <div class="chk"><label style="margin:0">Enable auto-upload</label><input type="checkbox" id="enable_yt" __YT__></div>
-    <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
-    <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
-    <div class="flex"><div><label>Privacy</label><select id="yt_privacy">
-      <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
-      <div><label>Upload limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
-    <label>OBS clips folder</label><input id="obs_clips_dir" value="__OBS__">
+      <div class="lbl" style="margin-top:24px">🚀 YouTube Shorts</div>
+      <div class="chk"><label style="margin:0">Enable auto-upload</label><input type="checkbox" id="enable_yt" __YT__></div>
+      <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
+      <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
+      <div class="flex"><div><label>Privacy</label><select id="yt_privacy">
+        <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
+        <div><label>Upload limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
+      <label>OBS clips folder</label><input id="obs_clips_dir" value="__OBS__">
 
-    <div class="lbl" style="margin-top:22px">🔔 Preferences</div>
-    <div class="chk"><label style="margin:0">Desktop notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
-    <div class="chk"><label style="margin:0">Auto-copy title to clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
+      <div class="lbl" style="margin-top:24px">🔔 Preferences</div>
+      <div class="chk"><label style="margin:0">Desktop notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
+      <div class="chk"><label style="margin:0">Auto-copy title to clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
 
-    <button class="save" type="submit">💾 Save settings</button>
-  </form>
+      <button class="save" type="submit">💾 Save settings</button>
+    </form>
+  </details>
 </div>
 <div id="toast" class="toast">Saved</div>
 <script>
@@ -583,7 +593,7 @@ setInterval(async()=>{try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
   let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
-  {const vu=$('vu');if(vu)vu.style.height=p+'%';}
+  {const vu=$('vu');if(vu)vu.style.width=p+'%';}
   $('cat').textContent=s.category||'auto';
   if(s.live)$('cap').textContent=s.live;
   $('whDot').style.color=s.whisper?'var(--ok)':'#fbbf24';$('whTxt').textContent=s.whisper?'ready':'loading…';
