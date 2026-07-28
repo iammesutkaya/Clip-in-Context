@@ -762,4 +762,7 @@ if __name__ == "__main__":
     threading.Thread(target=start_http, daemon=True).start()
     threading.Thread(target=live_loop, daemon=True).start()
     print(f"READY — trigger: http://localhost:{HTTP_PORT}/clip")
-    ClipApp().run()
+    app = ClipApp()
+    import AppKit  # menu-bar-only: no Dock icon (otherwise Python shows a Dock rocket)
+    AppKit.NSApplication.sharedApplication().setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    app.run()
