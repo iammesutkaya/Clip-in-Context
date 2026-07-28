@@ -474,8 +474,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <div class="lbl">🎙️ Streamer &amp; input</div>
     <label>Microphone device</label>
     <div style="position:relative">
-      <select id="mic_device" style="padding-right:52px">__MIC_OPTS__</select>
-      <div title="Mic level" style="position:absolute;right:32px;top:0;bottom:0;margin:auto 0;width:5px;height:22px;background:#1b2230;border-radius:3px;overflow:hidden;display:flex;align-items:flex-end">
+      <select id="mic_device" style="padding-left:26px">__MIC_OPTS__</select>
+      <div title="Mic level" style="position:absolute;left:11px;top:0;bottom:0;margin:auto 0;width:8px;height:22px;background:#1b2230;border-radius:4px;overflow:hidden;display:flex;align-items:flex-end">
         <i id="vu" style="display:block;width:100%;height:0;background:linear-gradient(0deg,#10b981,#f59e0b,#ef4444);transition:height .08s linear"></i>
       </div>
     </div>
