@@ -44,9 +44,28 @@ Edit from the dashboard, or the menu bar (mic, YouTube toggle/creds/auth), or
 Secrets (`config.json`, `client_secret.json`, `youtube_token.json`) are
 gitignored.
 
-## Optional: auto-start
-Add a `~/Library/LaunchAgents` plist running `python3 .../clip_backtrack.py`.
-Grant the mic prompt once on first launch.
+## Launch without the terminal (auto-start at login)
+A LaunchAgent runs it in the background — menu bar appears, no terminal window,
+starts at login:
+```bash
+cp com.mesut.clipbacktrack.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
+```
+Stop / remove:
+```bash
+launchctl unload -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
+```
+Logs go to `/tmp/clipbacktrack.log`. If captions ever stay silent under
+launchd, grant **Python** in System Settings → Privacy & Security → Microphone.
+After editing `clip_backtrack.py`, restart it with:
+```bash
+launchctl kickstart -k gui/$(id -u)/com.mesut.clipbacktrack
+```
+
+## Tests
+```bash
+python3 test_logic.py   # dedup, repetitive, RingBuffer edge cases
+```
 
 ## Requires
 Apple Silicon (MLX). Ollama with `llama3.2` for AI titles (falls back to the

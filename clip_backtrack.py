@@ -320,8 +320,9 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     if cfg["enable_clip"]:
         subprocess.run(["pbcopy"], input=title.encode())
     if cfg["enable_notif"]:
+        safe = title.replace("\\", "\\\\").replace('"', '\\"')  # AppleScript string-escape
         subprocess.run(["osascript", "-e",
-            f'display notification "{title}" with title "🎬 Clip Backtrack" subtitle "Copied to clipboard"'],
+            f'display notification "{safe}" with title "🎬 Clip Backtrack" subtitle "Copied to clipboard"'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     send_to_aitum(title)
     if cfg["enable_yt"]:
