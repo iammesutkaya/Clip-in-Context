@@ -8,6 +8,7 @@ APP="Clip Backtrack.app"
 
 swiftc ClipBacktrackApp.swift -o ClipBacktrackExecutable
 
+rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp ClipBacktrackExecutable   "$APP/Contents/MacOS/ClipBacktrackExecutable"
 cp mac_clip_backtrack.py      "$APP/Contents/Resources/mac_clip_backtrack.py"
@@ -32,5 +33,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# Sign the *assembled* bundle last, so Info.plist binds and resources seal.
+# Without this, macOS can't establish the app's identity and the mic-using
+# Python subprocess is silently denied (delivered digital silence).
+codesign --force --deep --sign - --entitlements entitlements.plist "$APP"
+codesign -dvv "$APP" 2>&1 | grep -iE "Signature|Info.plist|Sealed"
 
 echo "Built $APP"
