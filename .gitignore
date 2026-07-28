@@ -1,0 +1,18 @@
+# Secrets & local state (never commit)
+config.json
+client_secret.json
+youtube_token.json
+jargon_cache.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Build output (regenerated from source)
+Clip Backtrack.app/
+ClipBacktrackExecutable
+
+# macOS
+.DS_Store
