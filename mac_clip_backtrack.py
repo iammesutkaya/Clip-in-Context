@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import json
+import math
 import time
 import wave
 import html
@@ -40,6 +41,7 @@ except ImportError:
 
 import sounddevice as sd
 import numpy as np
+from scipy import signal
 
 # ----------------- CONFIGURATION -----------------
 STREAMER_NAME = "Mesut"                           # Your streamer name
@@ -194,12 +196,13 @@ def load_model():
         print("✅ Whisper model loaded successfully into RAM.")
 
 active_audio_stream = None
+stream_sample_rate = SAMPLE_RATE   # actual device rate; audio is resampled to SAMPLE_RATE for the buffer
 
 def audio_callback(indata, frames, time_info, status):
     global current_mic_volume
     if status:
         print(f"Audio Warning: {status}", file=sys.stderr)
-    
+
     # Store peak amplitude (float 0.0 to 1.0) for live VU meter
     current_mic_volume = float(np.max(np.abs(indata)))
 
@@ -208,8 +211,15 @@ def audio_callback(indata, frames, time_info, status):
         mono_signal = np.mean(indata, axis=1)
     else:
         mono_signal = indata[:, 0] if indata.ndim > 1 else indata.flatten()
-    
-    pcm16 = (mono_signal * 32767).astype(np.int16)
+
+    # Resample device-native rate down to 16 kHz for the buffer/Whisper.
+    # Virtual devices (Loopback/BlackHole) run at 48 kHz and don't resample
+    # themselves, so opening them at 16 kHz yielded broken/empty capture.
+    if stream_sample_rate != SAMPLE_RATE:
+        g = math.gcd(int(stream_sample_rate), SAMPLE_RATE)
+        mono_signal = signal.resample_poly(mono_signal, SAMPLE_RATE // g, int(stream_sample_rate) // g)
+
+    pcm16 = (np.clip(mono_signal, -1.0, 1.0) * 32767).astype(np.int16)
     audio_buffer.add_samples(pcm16)
 
 def get_audio_devices():
@@ -249,15 +259,18 @@ def start_audio_stream():
         except Exception:
             device_idx = None
 
+    global stream_sample_rate
     dev_info = devices[device_idx] if device_idx is not None and device_idx < len(devices) else {}
     dev_name = dev_info.get('name', 'System Default')
     chans = max(1, min(2, dev_info.get('max_input_channels', 1)))
+    stream_sample_rate = int(dev_info.get('default_samplerate', SAMPLE_RATE)) or SAMPLE_RATE
 
-    print(f"🎙️  Listening to Microphone Device #{device_idx}: '{dev_name}' ({chans} channel input)...")
+    print(f"🎙️  Listening to Microphone Device #{device_idx}: '{dev_name}' "
+          f"({chans} ch @ {stream_sample_rate} Hz -> {SAMPLE_RATE} Hz)...")
 
     active_audio_stream = sd.InputStream(
         device=device_idx,
-        samplerate=SAMPLE_RATE,
+        samplerate=stream_sample_rate,
         channels=chans,
         dtype='float32',
         callback=audio_callback
@@ -279,8 +292,6 @@ def live_transcription_loop():
     """Background thread that continuously transcribes live speech in real time."""
     global live_realtime_transcript
     print("🎙️ Continuous Live Real-Time Transcription active...")
-    silent_ticks = 0
-    warned_silent = False
     while True:
         try:
             time.sleep(1.5)
@@ -290,18 +301,6 @@ def live_transcription_loop():
             audio_data = audio_buffer.get_audio_data(seconds=4)
             if len(audio_data) < SAMPLE_RATE * 1.0:
                 continue
-
-            # Silence watchdog: warn once if the selected input delivers pure silence
-            # (e.g. a virtual audio bus with nothing routed into it).
-            if int(np.max(np.abs(audio_data))) == 0:
-                silent_ticks += 1
-                if silent_ticks >= 5 and not warned_silent:
-                    warned_silent = True
-                    print("⚠️ Mic input is SILENT (all zeros). The selected device may be a "
-                          "virtual bus. Pick your real mic in the dashboard mic dropdown.")
-                continue
-            silent_ticks = 0
-            warned_silent = False
 
             # Apply digital gain normalization
             boosted_audio = normalize_pcm16_gain(audio_data)
