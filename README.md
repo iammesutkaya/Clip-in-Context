@@ -44,22 +44,28 @@ Edit from the dashboard, or the menu bar (mic, YouTube toggle/creds/auth), or
 Secrets (`config.json`, `client_secret.json`, `youtube_token.json`) are
 gitignored.
 
-## Launch without the terminal (auto-start at login)
-A LaunchAgent runs it in the background — menu bar appears, no terminal window,
-starts at login:
+## Launch without the terminal (only when you stream)
+Double-click **Clip Backtrack.app** to start it; **Quit** from the menu bar to
+stop. It does NOT run at login — only when you click. The app just tells an
+idle LaunchAgent to start (launchd gives it the GUI session + mic access; a
+plain detached process can't run the menu bar).
+
+One-time setup:
 ```bash
+# register the idle agent (does not run until kickstarted)
 cp com.mesut.clipbacktrack.plist ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
+# build the double-clickable launcher
+osacompile -o "Clip Backtrack.app" -e 'do shell script "launchctl kickstart gui/$(id -u)/com.mesut.clipbacktrack"'
 ```
-Stop / remove:
+Move **Clip Backtrack.app** to /Applications if you like. Logs: `/tmp/clipbacktrack.log`.
+If captions ever stay silent, grant **Python** in System Settings → Privacy &
+Security → Microphone. After editing the code, just Quit and relaunch.
+
+Remove it entirely:
 ```bash
 launchctl unload -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
-```
-Logs go to `/tmp/clipbacktrack.log`. If captions ever stay silent under
-launchd, grant **Python** in System Settings → Privacy & Security → Microphone.
-After editing `clip_backtrack.py`, restart it with:
-```bash
-launchctl kickstart -k gui/$(id -u)/com.mesut.clipbacktrack
+rm ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
 ```
 
 ## Tests

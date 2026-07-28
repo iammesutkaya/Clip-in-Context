@@ -9,7 +9,7 @@
         <string>/Users/Mesut/Desktop/clip/clip_backtrack.py</string>
     </array>
     <key>WorkingDirectory</key><string>/Users/Mesut/Desktop/clip</string>
-    <key>RunAtLoad</key><true/>
+    <key>RunAtLoad</key><false/>
     <key>KeepAlive</key><false/>
     <key>StandardOutPath</key><string>/tmp/clipbacktrack.log</string>
     <key>StandardErrorPath</key><string>/tmp/clipbacktrack.log</string>

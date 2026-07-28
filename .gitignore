@@ -12,3 +12,6 @@ venv/
 
 # macOS
 .DS_Store
+
+# Double-clickable launcher (regenerate with osacompile — see README)
+Clip Backtrack.app/
