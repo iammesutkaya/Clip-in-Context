@@ -210,14 +210,13 @@ def clean(text):
 def ai_title(raw, game=""):
     if not raw or len(raw) < 5:
         return None
-    jargon = game_jargon(game)
-    words = ", ".join(dict.fromkeys(cfg["custom_words"] + jargon)) or cfg["streamer_name"]
     prompt = (
-        f"You are a Twitch viewer clipping streamer '{cfg['streamer_name']}'s stream.\n"
-        f"{'Game: ' + game if game else ''}\nKey names/jargon: {words}.\n"
-        "Write the clip title exactly how a hype/funny Twitch chatter would.\n"
-        "- Max 6 words (45 chars). Family-friendly. No quotes, no ending period.\n"
-        f'Spoken: "{raw}"\nTitle:')
+        f'A live streamer just said this on stream:\n"{raw}"\n\n'
+        "Write ONE short, catchy clip title (max 8 words) that captures what they ACTUALLY said above.\n"
+        "- Punchy and natural, like a real Twitch/YouTube clip title.\n"
+        "- Base it ONLY on the words above. Do NOT invent games, characters, names, or events that were not said.\n"
+        "- Family-friendly. No quotes, no hashtags, no emoji, no ending period.\n"
+        "Title:")
     # Ollama
     try:
         r = requests.post("http://localhost:11434/api/generate", timeout=6, json={
@@ -260,7 +259,7 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
                                  initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
     text = " ".join(res.get("text", "").split())
-    if not text:
+    if not re.search(r"[a-z0-9]", text.lower()):   # empty or punctuation-only (silence artifact)
         last_title, last_raw = "Awesome Stream Moment", "No clear speech"
         return last_title, last_raw
     title = ai_title(text, game)
