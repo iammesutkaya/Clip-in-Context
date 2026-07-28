@@ -474,7 +474,9 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#34d399;--radius:16px;
     --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b96a8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")}
   *{box-sizing:border-box}
-  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#161b26,#0b0d12);
+  html{background:#0b0d12}
+  body{margin:0;min-height:100vh;
+    background:radial-gradient(1200px 600px at 50% -10%,#161b26,#0b0d12) no-repeat fixed #0b0d12;
     color:var(--txt);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
     padding:28px 16px}
   .wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
