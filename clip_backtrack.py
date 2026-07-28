@@ -843,7 +843,8 @@ def start_http():
 # ---------------- menu bar (rumps) ----------------
 class ClipApp(rumps.App):
     def __init__(self):
-        super().__init__("🎙️", quit_button=None)
+        super().__init__("Clip Backtrack", quit_button=None)
+        self._symbol("waveform")   # SF Symbol menu-bar icon (shown when the status bar builds)
         self.title_item = rumps.MenuItem("Last Title: (none)")
         self.game_item = rumps.MenuItem("Category: (auto)")
         self.pause_item = rumps.MenuItem("Pause Recording", callback=self.toggle_pause)
@@ -881,11 +882,27 @@ class ClipApp(rumps.App):
         threading.Thread(target=start_stream, daemon=True).start()
         rumps.notification("Clip Backtrack", "Microphone", sender.title)
 
+    def _symbol(self, name):
+        """Set the menu-bar icon to an SF Symbol (template so it adapts to light/dark)."""
+        try:
+            import AppKit
+            img = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
+            if img is None:
+                return
+            img.setTemplate_(True)
+            self._icon_nsimage = img          # rumps uses this when it builds the status bar
+            item = getattr(getattr(self, "_nsapp", None), "nsstatusitem", None)
+            if item is not None:              # already running → update live
+                item.setTitle_("")
+                item.setImage_(img)
+        except Exception as e:
+            print(f"icon: {e}")
+
     def toggle_pause(self, sender):
         global recording_paused
         recording_paused = not recording_paused
         sender.title = "Resume Recording" if recording_paused else "Pause Recording"
-        self.title = "⏸️" if recording_paused else "🎙️"
+        self._symbol("pause.circle" if recording_paused else "waveform")
 
     def toggle_yt(self, sender):
         cfg["enable_yt"] = not cfg["enable_yt"]
