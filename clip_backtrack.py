@@ -35,6 +35,7 @@ cfg = {
     "custom_words": [],
     "default_game": "",
     "mic_device": "Voice - Input 01",   # substring match; "" = system default
+    "whisper_model": "mlx-community/whisper-large-v3-turbo",  # MLX Whisper repo
     "ollama_model": "llama3.2",          # model for jargon + title generation
     "enable_yt": False,
     "yt_privacy": "unlisted",
@@ -68,8 +69,15 @@ SAMPLE_RATE = 16000       # Whisper wants 16 kHz
 BUFFER_SECONDS = 60       # ring buffer length
 DEFAULT_CLIP_SECONDS = 30
 HTTP_PORT = 5001
-MODEL = "mlx-community/whisper-base.en-mlx"
 MAX_TITLE_LENGTH = 50
+
+# Whisper models offered in the dashboard (MLX community repos).
+WHISPER_CHOICES = [
+    "mlx-community/whisper-large-v3-turbo",   # best accuracy, still real-time on Apple Silicon
+    "mlx-community/whisper-medium.en-mlx",
+    "mlx-community/whisper-small.en-mlx",
+    "mlx-community/whisper-base.en-mlx",       # fastest / lowest quality
+]
 
 recording_paused = False
 mic_volume = 0.0
@@ -283,7 +291,7 @@ def boost(audio):
 def transcribe(audio, **kw):
     global whisper_ok
     # condition_on_previous_text=False stops the runaway "word word word…" repeat loop.
-    res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
+    res = mlx_whisper.transcribe(audio, path_or_hf_repo=cfg["whisper_model"],
                                  condition_on_previous_text=False, **kw)
     whisper_ok = True
     return res
@@ -539,6 +547,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
     <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
     <label>Default game fallback</label><input id="default_game" value="__GAME__">
+    <label>Transcription model (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
     <label>AI title model (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
 
     <div class="lbl" style="margin-top:22px">🚀 YouTube Shorts</div>
@@ -581,7 +590,8 @@ function copyTitle(){navigator.clipboard.writeText($('ttl').textContent);toast('
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
 async function save(ev){ev.preventDefault();
   const b={streamer_name:$('streamer_name').value,twitch_channel:$('twitch_channel').value,
-    mic_device:$('mic_device').value,default_game:$('default_game').value,ollama_model:$('ollama_model').value,
+    mic_device:$('mic_device').value,default_game:$('default_game').value,
+    whisper_model:$('whisper_model').value,ollama_model:$('ollama_model').value,
     custom_words:$('custom_words').value.split(',').map(s=>s.trim()).filter(Boolean),
     enable_yt:$('enable_yt').checked,google_client_id:$('google_client_id').value,
     google_client_secret:$('google_client_secret').value,yt_privacy:$('yt_privacy').value,
@@ -593,9 +603,10 @@ async function save(ev){ev.preventDefault();
 
 def apply_settings(data):
     """Update cfg from a settings dict (web form or API). Restarts mic if changed."""
-    global recording_paused
+    global recording_paused, whisper_ok
     mic_changed = "mic_device" in data and str(data["mic_device"]) != cfg["mic_device"]
-    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "ollama_model", "yt_privacy", "obs_clips_dir"):
+    whisper_changed = "whisper_model" in data and str(data["whisper_model"]) != cfg["whisper_model"]
+    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "whisper_model", "ollama_model", "yt_privacy", "obs_clips_dir"):
         if k in data:
             cfg[k] = str(data[k])
     if "custom_words" in data:
@@ -619,6 +630,9 @@ def apply_settings(data):
     save_config()
     if mic_changed:
         threading.Thread(target=start_stream, daemon=True).start()
+    if whisper_changed:
+        whisper_ok = False                       # load the new model (first use downloads it)
+        threading.Thread(target=warmup_whisper, daemon=True).start()
 
 def live_loop():
     """Continuously transcribe the last few seconds for live captions (no title)."""
@@ -669,10 +683,15 @@ def dashboard_html():
     if cfg["ollama_model"] not in models:
         models.insert(0, cfg["ollama_model"])
     model_opts = "".join(f'<option{" selected" if m == cfg["ollama_model"] else ""}>{e(m)}</option>' for m in models)
+    whis = WHISPER_CHOICES[:]
+    if cfg["whisper_model"] not in whis:
+        whis.insert(0, cfg["whisper_model"])
+    label = lambda m: e(m.split("/")[-1].replace("whisper-", "").replace("-mlx", ""))
+    whisper_opts = "".join(f'<option value="{e(m)}"{" selected" if m == cfg["whisper_model"] else ""}>{label(m)}</option>' for m in whis)
     repl = {
         "__STREAMER__": e(cfg["streamer_name"]), "__TWITCH__": e(cfg["twitch_channel"]),
         "__WORDS__": e(", ".join(cfg["custom_words"])), "__GAME__": e(cfg["default_game"]),
-        "__MIC_OPTS__": opts, "__MODEL_OPTS__": model_opts,
+        "__MIC_OPTS__": opts, "__MODEL_OPTS__": model_opts, "__WHISPER_OPTS__": whisper_opts,
         "__OBS__": e(cfg["obs_clips_dir"]), "__KBPS__": e(cfg["max_upload_kbps"]),
         "__CID__": e(cfg["google_client_id"]),
         "__SEC_PH__": "•••••• saved" if cfg["google_client_secret"] else "GOCSPX-…",
