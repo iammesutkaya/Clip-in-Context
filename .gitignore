@@ -15,3 +15,6 @@ venv/
 
 # Double-clickable launcher (regenerate with osacompile — see README)
 Clip Backtrack.app/
+
+# Local clip history
+clips.jsonl

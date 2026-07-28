@@ -84,7 +84,33 @@ mic_volume = 0.0
 live_text = ""                       # continuous live caption (title is clip-only)
 transcribe_lock = threading.Lock()   # MLX isn't reentrant; serialize live loop vs clip trigger
 whisper_ok = False                   # True once MLX has transcribed successfully
+whisper_err = False                  # True if the model failed to load
 ollama_ok = False                    # True while Ollama is reachable (health thread)
+notice = ""                          # transient warning shown on the dashboard
+notice_ts = 0.0
+clip_history = []                    # recent clips: {"t":epoch,"title","raw"}, newest last
+CLIPS_LOG = os.path.join(HERE, "clips.jsonl")
+if os.path.exists(CLIPS_LOG):
+    try:
+        with open(CLIPS_LOG, encoding="utf-8") as _f:
+            clip_history = [json.loads(l) for l in _f if l.strip()][-50:]
+    except Exception:
+        clip_history = []
+
+def set_notice(msg):
+    global notice, notice_ts
+    notice, notice_ts = msg, time.time()
+    print(f"⚠️ {msg}")
+
+def append_history(title, raw):
+    global clip_history
+    rec = {"t": time.time(), "title": title, "raw": raw}
+    clip_history = (clip_history + [rec])[-50:]
+    try:
+        with open(CLIPS_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 class RingBuffer:
     """Fixed float32 ring buffer, last BUFFER_SECONDS seconds at 16 kHz."""
@@ -289,19 +315,22 @@ def boost(audio):
     return np.clip(audio * (0.9 / peak), -1.0, 1.0).astype(np.float32) if peak > 1e-4 else audio
 
 def transcribe(audio, **kw):
-    global whisper_ok
+    global whisper_ok, whisper_err
     # condition_on_previous_text=False stops the runaway "word word word…" repeat loop.
     res = mlx_whisper.transcribe(audio, path_or_hf_repo=cfg["whisper_model"],
                                  condition_on_previous_text=False, **kw)
-    whisper_ok = True
+    whisper_ok, whisper_err = True, False
     return res
 
 def warmup_whisper():
     """Load the MLX model at startup (sets status + removes first-clip latency)."""
+    global whisper_err
     try:
         with transcribe_lock:
             transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32))
     except Exception as e:
+        whisper_err = True
+        set_notice(f"Whisper model '{cfg['whisper_model'].split('/')[-1]}' failed to load")
         print(f"⚠️ whisper warmup: {e}")
 
 def health_loop():
@@ -352,10 +381,13 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
         return last_title, last_raw
     title = ai_title(text, game)
     if not title:
+        if not ollama_ok:
+            set_notice("Ollama unreachable — used a fallback title")
         sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
         title = (sentences[-1] if sentences else text)[:MAX_TITLE_LENGTH]
     title = clean(title)
     last_title, last_raw = title, text
+    append_history(title, text)
     print(f'📌 "{title}"  ← "{text}"')
     if cfg["enable_clip"]:
         subprocess.run(["pbcopy"], input=title.encode())
@@ -439,10 +471,12 @@ def write_client_secret():
 
 def upload_youtube_async(path, title, raw, game):
     def work():
+      try:
         if not path or not os.path.exists(path):
             return
         svc = youtube_service()
         if not svc:
+            set_notice("YouTube not authenticated — set credentials in Settings")
             return
         from googleapiclient.http import MediaFileUpload
         yt_title = title if "#shorts" in title.lower() else f"{title} #Shorts"
@@ -463,6 +497,8 @@ def upload_youtube_async(path, title, raw, game):
             if wait > 0:
                 time.sleep(wait)
         print(f"✅ https://youtu.be/{resp['id']}")
+      except Exception as e:
+        set_notice(f"YouTube upload failed: {e}")
     threading.Thread(target=work, daemon=True).start()
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
@@ -539,6 +575,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <span>🎮 <span id="cat" class="cat">…</span></span>
   </div>
 
+  <div id="notice" class="card" style="display:none;border-color:#7c2d12;background:#2a1206;color:#fca5a5;padding:11px 16px;font-size:13px;align-items:center;justify-content:space-between;gap:12px;flex-direction:row">
+    <span id="noticeMsg"></span>
+    <button class="mini" style="background:#4a1d1d;color:#fca5a5" onclick="$('notice').style.display='none'">Dismiss</button>
+  </div>
+
   <div class="card">
     <div class="row" style="margin-bottom:10px">
       <div class="lbl" style="margin:0">💬 Live captions</div>
@@ -556,6 +597,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <button class="go" style="margin:0" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
     </div>
   </div>
+
+  <details class="set">
+    <summary>🕒 Recent clips</summary>
+    <div class="setbody" id="history" style="display:flex;flex-direction:column;gap:2px;font-size:13px">No clips yet.</div>
+  </details>
 
   <details class="set">
     <summary>⚙️ Settings</summary>
@@ -597,6 +643,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <div id="toast" class="toast">Saved</div>
 <script>
 const $=id=>document.getElementById(id);
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+async function loadHistory(){try{const h=await(await fetch('/api/history')).json();
+  $('history').innerHTML=h.length?h.map(c=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:8px 0"><span style="color:var(--blue);font-weight:600">${esc(c.title)}</span><span style="color:var(--dim);white-space:nowrap">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join(''):'No clips yet.';
+}catch(e){}}
+loadHistory();
 let paused=false;
 function togglePause(){fetch(paused?'/resume':'/pause');}
 function quitApp(){if(confirm('Quit Clip Backtrack? The menu bar app will close.')){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">Clip Backtrack stopped. You can close this tab.</p>';}}
@@ -607,8 +658,10 @@ setInterval(async()=>{try{
   {const vu=$('vu');if(vu)vu.style.width=p+'%';const v2=$('vu2');if(v2)v2.style.height=p+'%';}
   $('cat').textContent=s.category||'auto';
   if(s.live)$('cap').textContent=s.live;
-  $('whDot').style.color=s.whisper?'var(--ok)':'#fbbf24';$('whTxt').textContent=s.whisper?'ready':'loading…';
+  $('whDot').style.color=s.whisper_err?'#f87171':(s.whisper?'var(--ok)':'#fbbf24');
+  $('whTxt').textContent=s.whisper_err?'error':(s.whisper?'ready':'loading…');
   $('olDot').style.color=s.ollama?'var(--ok)':'#f87171';$('olTxt').textContent=s.ollama?'up':'down';
+  if(s.notice){$('noticeMsg').textContent='⚠ '+s.notice;$('notice').style.display='flex';}
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Running';l.classList.remove('off');}
   paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
   if(s.last_title){$('ttl').textContent=s.last_title;}
@@ -616,7 +669,7 @@ setInterval(async()=>{try{
 }catch(e){}},150);
 async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.disabled=true;
   try{const d=await(await fetch('/clip?json=1&duration='+$('dur').value)).json();
-    if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';}catch(e){}
+    if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
   b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
 function copyTitle(){navigator.clipboard.writeText($('ttl').textContent);toast('Copied');}
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
@@ -690,7 +743,9 @@ def status_json():
         "mic_volume": mic_volume,
         "paused": recording_paused,
         "whisper": whisper_ok,
+        "whisper_err": whisper_err,
         "ollama": ollama_ok,
+        "notice": notice if (time.time() - notice_ts < 30) else "",
         "live": live_text,
         "last_title": last_title,
         "last_raw": last_raw,
@@ -755,6 +810,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(dashboard_html(), "text/html; charset=utf-8")
         elif u.path == "/api/status":
             self._send(json.dumps(status_json()))
+        elif u.path == "/api/history":
+            self._send(json.dumps(clip_history[-20:][::-1]))   # newest first
         elif u.path == "/clip":
             dur = max(5, min(BUFFER_SECONDS, int(q.get("duration", [DEFAULT_CLIP_SECONDS])[0])))
             title, raw = make_clip(dur, q.get("game", [""])[0])

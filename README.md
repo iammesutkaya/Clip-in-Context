@@ -35,8 +35,20 @@ the browser.
 
 ## Trigger
 - Menu bar → **Trigger Clip Now**, dashboard button, or
-- HTTP (Stream Deck / hotkey / Aitum): `GET http://localhost:5001/clip?duration=30&game=Valorant`
+- HTTP (Stream Deck / Aitum): `GET http://localhost:5001/clip?duration=30&game=Valorant`
 - Also `GET /pause` and `/resume`.
+
+### Global hotkey (native macOS, no extra permission)
+Bind any key to a clip trigger with **Shortcuts.app** (no in-app hotkey daemon,
+no Accessibility prompt):
+1. Shortcuts.app → new Shortcut → add **Get Contents of URL** → `http://localhost:5001/clip?duration=30`.
+2. Shortcut Details → **Add Keyboard Shortcut** → pick your key (e.g. ⌃⌥C).
+Raycast/BetterTouchTool work too — anything that can run a URL/`curl` on a hotkey.
+
+## Recent clips & errors
+The dashboard lists your **Recent clips** (persisted to `clips.jsonl`) and shows
+a **warning banner** when something degrades — Whisper failed to load, Ollama
+unreachable (fell back to a plain title), or a YouTube upload failed.
 
 ## Config
 Edit from the dashboard, or the menu bar (mic, YouTube toggle/creds/auth), or
