@@ -472,10 +472,12 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <form class="card" onsubmit="save(event)">
     <div class="lbl">🎙️ Streamer &amp; input</div>
-    <label>Microphone device</label><select id="mic_device">__MIC_OPTS__</select>
-    <div class="row" style="margin-top:8px;gap:8px">
-      <div class="vu" style="height:5px;border:none;background:#1b2230"><i id="vu"></i></div>
-      <span id="vupct" style="font-size:11px;color:var(--dim);min-width:32px;text-align:right">0%</span>
+    <label>Microphone device</label>
+    <div style="position:relative">
+      <select id="mic_device" style="padding-right:52px">__MIC_OPTS__</select>
+      <div title="Mic level" style="position:absolute;right:32px;top:0;bottom:0;margin:auto 0;width:5px;height:22px;background:#1b2230;border-radius:3px;overflow:hidden;display:flex;align-items:flex-end">
+        <i id="vu" style="display:block;width:100%;height:0;background:linear-gradient(0deg,#10b981,#f59e0b,#ef4444);transition:height .08s linear"></i>
+      </div>
     </div>
     <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
       <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
@@ -505,7 +507,7 @@ setInterval(async()=>{try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
   let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
-  $('vu').style.width=p+'%';$('vupct').textContent=p+'%';
+  {const vu=$('vu');if(vu)vu.style.height=p+'%';}
   $('cat').textContent=s.category||'auto';
   if(s.live)$('cap').textContent=s.live;
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
