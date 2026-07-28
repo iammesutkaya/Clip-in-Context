@@ -471,7 +471,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <title>Clip Backtrack</title>
 <style>
   :root{--bg:#0b0d12;--card:#141821;--line:#232a38;--txt:#e8edf5;--dim:#8b96a8;
-    --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#34d399;--radius:16px}
+    --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#34d399;--radius:16px;
+    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b96a8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")}
   *{box-sizing:border-box}
   body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#161b26,#0b0d12);
     color:var(--txt);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -500,6 +501,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   label{font-size:13px;color:var(--dim);font-weight:600;display:block;margin:14px 0 6px}
   input,select{width:100%;background:#0b0d12;border:1px solid #313b4d;border-radius:9px;
     color:var(--txt);padding:10px 12px;font:inherit}
+  select{appearance:none;-webkit-appearance:none;padding-right:34px;
+    background-image:var(--chev);background-repeat:no-repeat;background-position:right 12px center;background-size:13px}
   input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
   .flex{display:flex;gap:14px}.flex>div{flex:1}
   .chk{display:flex;align-items:center;justify-content:space-between;margin:12px 0}
@@ -512,7 +515,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   details.set summary{list-style:none;cursor:pointer;padding:16px 20px;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;font-weight:700;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
   details.set summary::-webkit-details-marker{display:none}
-  details.set summary::after{content:'⌄';font-size:15px;transition:transform .2s}
+  details.set summary::after{content:'';width:14px;height:14px;background:var(--chev) center/14px no-repeat;transition:transform .2s}
   details.set[open] summary::after{transform:rotate(180deg)}
   details.set .setbody{padding:0 20px 22px}
 </style></head><body><div class="wrap">
@@ -547,7 +550,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <div class="title"><span id="ttl">No clip yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
     <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
     <div class="row" style="margin-top:14px;gap:10px;align-items:stretch">
-      <select id="dur" style="width:auto;padding:0 12px;font-weight:700"><option value="15">15s</option><option value="30" selected>30s</option><option value="45">45s</option></select>
+      <select id="dur" style="width:auto;padding:0 32px 0 14px;font-weight:700"><option value="15">15s</option><option value="30" selected>30s</option><option value="45">45s</option></select>
       <button class="go" style="margin:0" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
     </div>
   </div>
