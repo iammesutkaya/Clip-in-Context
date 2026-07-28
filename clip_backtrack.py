@@ -30,11 +30,11 @@ YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 # ---------------- config (persisted to config.json) ----------------
 cfg = {
-    "streamer_name": "Mesut",
-    "twitch_channel": "mesutkaya",
+    "streamer_name": "",
+    "twitch_channel": "",
     "custom_words": [],
     "default_game": "",
-    "mic_device": "Voice - Input 01",   # substring match; "" = system default
+    "mic_device": "",                    # substring match; "" = system default
     "whisper_model": "mlx-community/whisper-large-v3-turbo",  # MLX Whisper repo
     "ollama_model": "llama3.2",          # model for jargon + title generation
     "enable_yt": False,

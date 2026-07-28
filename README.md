@@ -4,88 +4,78 @@ Rolling mic transcript backtrack + AI clip titler for macOS streamers.
 
 Press a button → the last 30s of your speech is transcribed locally (MLX
 Whisper), rewritten into a Twitch-style clip title (Ollama), copied to the
-clipboard, pushed to Aitum, and optionally uploaded as a YouTube Short.
-
-## Design
-One Python process, launched from the Terminal. That's deliberate: a
-terminal-launched process inherits microphone permission, so there is **no .app
-bundle, no Swift, no code signing, and no macOS TCC silence** — the exact trap
-the earlier `.app` version fell into. Menu bar via `rumps`.
+clipboard, pushed to Aitum, and optionally uploaded as a YouTube Short. All
+local — no cloud, no per-clip cost.
 
 ```
 mic → rolling 30s buffer → (trigger) → MLX Whisper → AI title
     → clipboard + notification → Aitum → optional YouTube Short
 ```
 
-## Run
-```bash
-pip install -r requirements.txt
-python3 clip_backtrack.py
-```
-A 🎙️ icon appears in the menu bar. Grant microphone access the first time.
+## Requirements
+- **Apple Silicon Mac** (MLX Whisper needs an M-series chip).
+- **[Ollama](https://ollama.com)** for AI titles: `ollama serve` running, with a
+  model pulled — `ollama pull llama3.2` (or `qwen2.5`). Without it, titles fall
+  back to the last spoken sentence (or OpenAI if `OPENAI_API_KEY` is set).
+- Optional: OBS (for YouTube upload), Aitum Nexus (for the title variable).
 
-## Dashboard
-Menu bar → **Open Dashboard…** (or visit `http://localhost:5001/`). Served by
-the built-in stdlib HTTP server — no extra dependency. It has a **live mic VU
-meter** (instant confirmation the mic works), the trigger button, latest title +
-transcript, live Twitch category, and a full settings form (streamer, mic
-device, custom words, YouTube, privacy, preferences). Settings save straight to
-`config.json`; the OAuth secret is a password field and is never sent back to
-the browser.
+## Install
+```bash
+git clone <this-repo> clip-backtrack && cd clip-backtrack
+./setup.sh
+```
+`setup.sh` creates a venv, installs dependencies, registers an on-demand
+LaunchAgent, and builds a double-clickable **Clip Backtrack.app**. The Whisper
+model downloads automatically on first run.
+
+## Use
+- **Start:** double-click **Clip Backtrack.app** (move it to /Applications or the
+  Dock). A waveform icon appears in the menu bar. Grant microphone access the
+  first time. It does **not** run at login — only when you launch it.
+- **Stop:** Quit from the menu bar.
+- **Dashboard:** menu bar → **Open Dashboard…** or `http://localhost:5001/` —
+  live captions, mic meter, trigger, recent clips, engine status, and settings.
+
+### Design note
+One Python process, launched via launchd's GUI session, so it inherits
+microphone permission — **no signed `.app`, no Swift, no code signing, no macOS
+TCC silence** (the trap an earlier `.app` version fell into). Menu bar via
+`rumps`; dashboard served by the stdlib HTTP server (no web framework).
 
 ## Trigger
-- Menu bar → **Trigger Clip Now**, dashboard button, or
+- Menu bar / dashboard **Trigger Clip Now**, or
 - HTTP (Stream Deck / Aitum): `GET http://localhost:5001/clip?duration=30&game=Valorant`
-- Also `GET /pause` and `/resume`.
+- `GET /pause`, `GET /resume`.
 
 ### Global hotkey (native macOS, no extra permission)
-Bind any key to a clip trigger with **Shortcuts.app** (no in-app hotkey daemon,
-no Accessibility prompt):
-1. Shortcuts.app → new Shortcut → add **Get Contents of URL** → `http://localhost:5001/clip?duration=30`.
+Bind any key with **Shortcuts.app** — no daemon, no Accessibility prompt:
+1. Shortcuts.app → new Shortcut → **Get Contents of URL** → `http://localhost:5001/clip?duration=30`.
 2. Shortcut Details → **Add Keyboard Shortcut** → pick your key (e.g. ⌃⌥C).
-Raycast/BetterTouchTool work too — anything that can run a URL/`curl` on a hotkey.
 
-## Recent clips & errors
-The dashboard lists your **Recent clips** (persisted to `clips.jsonl`) and shows
-a **warning banner** when something degrades — Whisper failed to load, Ollama
-unreachable (fell back to a plain title), or a YouTube upload failed.
+Raycast / BetterTouchTool work too — anything that runs a URL on a hotkey.
 
 ## Config
-Edit from the dashboard, or the menu bar (mic, YouTube toggle/creds/auth), or
-`config.json` directly (**Edit Settings** / **Reload Settings** in the menu).
-Secrets (`config.json`, `client_secret.json`, `youtube_token.json`) are
-gitignored.
+Everything is editable from the dashboard (or the menu bar for mic / YouTube).
+Advanced fields live in `config.json`. Secrets (`config.json`,
+`client_secret.json`, `youtube_token.json`) are gitignored and never sent back
+to the browser.
 
-## Launch without the terminal (only when you stream)
-Double-click **Clip Backtrack.app** to start it; **Quit** from the menu bar to
-stop. It does NOT run at login — only when you click. The app just tells an
-idle LaunchAgent to start (launchd gives it the GUI session + mic access; a
-plain detached process can't run the menu bar).
-
-One-time setup:
-```bash
-# register the idle agent (does not run until kickstarted)
-cp com.mesut.clipbacktrack.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
-# build the double-clickable launcher
-osacompile -o "Clip Backtrack.app" -e 'do shell script "launchctl kickstart gui/$(id -u)/com.mesut.clipbacktrack"'
-cp AppIcon.icns "Clip Backtrack.app/Contents/Resources/applet.icns"   # app icon
-```
-Move **Clip Backtrack.app** to /Applications if you like. Logs: `/tmp/clipbacktrack.log`.
-If captions ever stay silent, grant **Python** in System Settings → Privacy &
-Security → Microphone. After editing the code, just Quit and relaunch.
-
-Remove it entirely:
-```bash
-launchctl unload -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
-rm ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
-```
+## Recent clips & errors
+The dashboard lists recent clips (persisted to `clips.jsonl`, **Clear all** to
+wipe) and shows a warning banner when something degrades — Whisper failed to
+load, Ollama unreachable, or a YouTube upload failed.
 
 ## Tests
 ```bash
-python3 test_logic.py   # dedup, repetitive, RingBuffer edge cases
+./.venv/bin/python3 test_logic.py   # dedup, repetitive, RingBuffer edge cases
 ```
 
-## Requires
-Apple Silicon (MLX). Ollama with `llama3.2` for AI titles (falls back to the
-last spoken sentence, or `OPENAI_API_KEY` if set). Aitum Nexus + OBS optional.
+## Uninstall
+```bash
+launchctl unload -w ~/Library/LaunchAgents/com.clipbacktrack.app.plist
+rm ~/Library/LaunchAgents/com.clipbacktrack.app.plist
+```
+Then delete the folder and `Clip Backtrack.app`. Logs: `/tmp/clipbacktrack.log`.
+
+## License
+MIT — see [LICENSE](LICENSE).
