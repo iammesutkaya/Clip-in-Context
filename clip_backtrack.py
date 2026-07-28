@@ -12,8 +12,8 @@ no .app bundle, no code signing, and no TCC silence. Menu bar via rumps.
 Trigger: menu bar item, or HTTP  GET http://localhost:5001/clip?duration=30&game=Valorant
 Run:     python3 clip_backtrack.py
 """
-import os, re, sys, json, math, time, threading, subprocess, urllib.parse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 import sounddevice as sd
@@ -378,30 +378,225 @@ def upload_youtube_async(path, title, raw, game):
     threading.Thread(target=work, daemon=True).start()
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
+PAGE = """<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Backtrack</title>
+<style>
+  :root{--bg:#0b0d12;--card:#141821;--line:#232a38;--txt:#e8edf5;--dim:#8b96a8;
+    --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#34d399;--radius:16px}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#161b26,#0b0d12);
+    color:var(--txt);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    padding:28px 16px}
+  .wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  h1{font-size:19px;margin:0;display:flex;align-items:center;gap:9px}
+  .pill{font-size:12px;font-weight:700;padding:4px 11px;border-radius:20px;background:#0e2a20;color:var(--ok)}
+  .pill.off{background:#2a1416;color:#f87171}
+  .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:10px}
+  .vu{height:18px;border-radius:9px;background:#0b0f19;border:1px solid var(--line);overflow:hidden;flex:1}
+  .vu>i{display:block;height:100%;width:0;border-radius:9px;
+    background:linear-gradient(90deg,#10b981,#f59e0b,#ef4444);transition:width .08s linear}
+  .pct{min-width:42px;text-align:right;font-weight:700;color:var(--blue)}
+  .title{font-size:22px;font-weight:800;color:var(--blue);background:#0b0f19;border:1px solid var(--line);
+    border-radius:12px;padding:14px 16px;word-break:break-word;display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .scriptbox{font-style:italic;color:var(--dim);background:#0e131c;border:1px solid var(--line);
+    border-radius:10px;padding:11px 14px;margin-top:10px;min-height:20px}
+  button{font:inherit;cursor:pointer;border:none;border-radius:12px;color:#fff;font-weight:700}
+  .go{width:100%;padding:15px;font-size:16px;margin-top:14px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 8px 22px rgba(139,92,246,.35)}
+  .go:active{transform:translateY(1px)}
+  .mini{background:#2a3345;padding:6px 12px;font-size:12px;border-radius:8px}
+  .save{width:100%;padding:14px;font-size:15px;background:linear-gradient(135deg,#6366f1,#3b82f6);margin-top:6px}
+  label{font-size:13px;color:var(--dim);font-weight:600;display:block;margin:14px 0 6px}
+  input,select{width:100%;background:#0b0d12;border:1px solid #313b4d;border-radius:9px;
+    color:var(--txt);padding:10px 12px;font:inherit}
+  input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
+  .flex{display:flex;gap:14px}.flex>div{flex:1}
+  .chk{display:flex;align-items:center;justify-content:space-between;margin:12px 0}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(80px);
+    background:#0e2a20;color:var(--ok);border:1px solid #14503b;padding:11px 20px;border-radius:12px;
+    font-weight:700;transition:transform .25s;opacity:0}
+  .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+  .cat{color:var(--blue);font-weight:700}
+</style></head><body><div class="wrap">
+
+  <div class="card row"><h1>🎬 Clip Backtrack</h1><span id="live" class="pill">● Recording</span></div>
+
+  <div class="card">
+    <div class="lbl">🎙️ Microphone level</div>
+    <div class="row"><div class="vu"><i id="vu"></i></div><span id="vupct" class="pct">0%</span></div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">📌 Latest clip title</div>
+    <div class="title"><span id="ttl">No clip yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
+    <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
+    <div class="row" style="margin-top:14px;gap:10px">
+      <select id="dur" style="width:auto"><option value="15">15s</option><option value="30" selected>30s</option><option value="45">45s</option></select>
+      <button class="go" style="margin:0" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
+    </div>
+  </div>
+
+  <div class="card row"><span class="lbl" style="margin:0">🎮 Live category</span><span id="cat" class="cat">…</span></div>
+
+  <form class="card" onsubmit="save(event)">
+    <div class="lbl">🎙️ Streamer &amp; input</div>
+    <label>Microphone device</label><select id="mic_device">__MIC_OPTS__</select>
+    <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
+      <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
+    <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
+    <label>Default game fallback</label><input id="default_game" value="__GAME__">
+
+    <div class="lbl" style="margin-top:22px">🚀 YouTube Shorts</div>
+    <div class="chk"><label style="margin:0">Enable auto-upload</label><input type="checkbox" id="enable_yt" __YT__></div>
+    <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
+    <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
+    <div class="flex"><div><label>Privacy</label><select id="yt_privacy">
+      <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
+      <div><label>Upload limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
+    <label>OBS clips folder</label><input id="obs_clips_dir" value="__OBS__">
+
+    <div class="lbl" style="margin-top:22px">🔔 Preferences</div>
+    <div class="chk"><label style="margin:0">Desktop notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
+    <div class="chk"><label style="margin:0">Auto-copy title to clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
+
+    <button class="save" type="submit">💾 Save settings</button>
+  </form>
+</div>
+<div id="toast" class="toast">Saved</div>
+<script>
+const $=id=>document.getElementById(id);
+setInterval(async()=>{try{
+  const s=await(await fetch('/api/status')).json();
+  const nf=0.0003,v=s.mic_volume||0;
+  let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
+  $('vu').style.width=p+'%';$('vupct').textContent=p+'%';
+  $('cat').textContent=s.category||'auto';
+  const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
+  if(s.last_title){$('ttl').textContent=s.last_title;}
+  if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
+}catch(e){}},150);
+async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.disabled=true;
+  try{const d=await(await fetch('/clip?json=1&duration='+$('dur').value)).json();
+    if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';}catch(e){}
+  b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
+function copyTitle(){navigator.clipboard.writeText($('ttl').textContent);toast('Copied');}
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
+async function save(ev){ev.preventDefault();
+  const b={streamer_name:$('streamer_name').value,twitch_channel:$('twitch_channel').value,
+    mic_device:$('mic_device').value,default_game:$('default_game').value,
+    custom_words:$('custom_words').value.split(',').map(s=>s.trim()).filter(Boolean),
+    enable_yt:$('enable_yt').checked,google_client_id:$('google_client_id').value,
+    google_client_secret:$('google_client_secret').value,yt_privacy:$('yt_privacy').value,
+    max_upload_kbps:parseInt($('max_upload_kbps').value)||1500,obs_clips_dir:$('obs_clips_dir').value,
+    enable_notif:$('enable_notif').checked,enable_clip:$('enable_clip').checked};
+  const r=await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+  toast(r.ok?'Saved':'Error');if(r.ok)$('google_client_secret').value='';}
+</script></body></html>"""
+
+def apply_settings(data):
+    """Update cfg from a settings dict (web form or API). Restarts mic if changed."""
+    global recording_paused
+    mic_changed = "mic_device" in data and str(data["mic_device"]) != cfg["mic_device"]
+    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "yt_privacy", "obs_clips_dir"):
+        if k in data:
+            cfg[k] = str(data[k])
+    if "custom_words" in data:
+        raw = data["custom_words"] if isinstance(data["custom_words"], list) else str(data["custom_words"]).split(",")
+        cfg["custom_words"] = [str(w).strip() for w in raw if str(w).strip()]
+    for k in ("enable_yt", "enable_notif", "enable_clip"):
+        if k in data:
+            cfg[k] = bool(data[k])
+    if "max_upload_kbps" in data:
+        try:
+            cfg["max_upload_kbps"] = int(data["max_upload_kbps"])
+        except (TypeError, ValueError):
+            pass
+    cid, sec = str(data.get("google_client_id", "")).strip(), str(data.get("google_client_secret", "")).strip()
+    if cid:
+        cfg["google_client_id"] = cid
+    if sec:
+        cfg["google_client_secret"] = sec
+    if cfg["google_client_id"] and cfg["google_client_secret"]:
+        write_client_secret()
+    save_config()
+    if mic_changed:
+        threading.Thread(target=start_stream, daemon=True).start()
+
+def status_json():
+    return {
+        "mic_volume": mic_volume,
+        "paused": recording_paused,
+        "last_title": last_title,
+        "last_raw": last_raw,
+        "category": detected_game,
+    }
+
+def dashboard_html():
+    e = lambda v: html.escape(str(v), quote=True)
+    opts = "".join(
+        f'<option value="{e(d["name"])}"{" selected" if cfg["mic_device"] and cfg["mic_device"].lower() in d["name"].lower() else ""}>{e(d["name"])}</option>'
+        for d in input_devices()) or '<option value="">Default input</option>'
+    repl = {
+        "__STREAMER__": e(cfg["streamer_name"]), "__TWITCH__": e(cfg["twitch_channel"]),
+        "__WORDS__": e(", ".join(cfg["custom_words"])), "__GAME__": e(cfg["default_game"]),
+        "__MIC_OPTS__": opts, "__OBS__": e(cfg["obs_clips_dir"]), "__KBPS__": e(cfg["max_upload_kbps"]),
+        "__CID__": e(cfg["google_client_id"]),
+        "__SEC_PH__": "•••••• saved" if cfg["google_client_secret"] else "GOCSPX-…",
+        "__YT__": "checked" if cfg["enable_yt"] else "", "__NOTIF__": "checked" if cfg["enable_notif"] else "",
+        "__CLIP__": "checked" if cfg["enable_clip"] else "",
+        "__PUB__": "selected" if cfg["yt_privacy"] == "public" else "",
+        "__UNL__": "selected" if cfg["yt_privacy"] == "unlisted" else "",
+        "__PRV__": "selected" if cfg["yt_privacy"] == "private" else "",
+    }
+    page = PAGE
+    for k, v in repl.items():
+        page = page.replace(k, str(v))
+    return page
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _send(self, body, ctype="application/json", code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.end_headers()
+        self.wfile.write(body if isinstance(body, bytes) else body.encode())
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
-        if u.path == "/clip":
+        if u.path in ("/", "/dashboard"):
+            self._send(dashboard_html(), "text/html; charset=utf-8")
+        elif u.path == "/api/status":
+            self._send(json.dumps(status_json()))
+        elif u.path == "/clip":
             dur = max(5, min(BUFFER_SECONDS, int(q.get("duration", [DEFAULT_CLIP_SECONDS])[0])))
             title, raw = make_clip(dur, q.get("game", [""])[0])
-            body = json.dumps({"title": title, "raw_transcript": raw}).encode()
+            self._send(json.dumps({"title": title, "raw_transcript": raw}))
         elif u.path == "/pause":
-            globals().__setitem__("recording_paused", True); body = b'{"status":"paused"}'
+            globals().__setitem__("recording_paused", True); self._send(b'{"status":"paused"}')
         elif u.path == "/resume":
-            globals().__setitem__("recording_paused", False); body = b'{"status":"recording"}'
+            globals().__setitem__("recording_paused", False); self._send(b'{"status":"recording"}')
         else:
-            self.send_response(404); self.end_headers(); return
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(body)
+            self._send(b"not found", "text/plain", 404)
+
+    def do_POST(self):
+        if urllib.parse.urlparse(self.path).path == "/settings":
+            n = int(self.headers.get("Content-Length", 0))
+            try:
+                apply_settings(json.loads(self.rfile.read(n) or b"{}"))
+                self._send(b'{"status":"saved"}')
+            except Exception as ex:
+                self._send(json.dumps({"status": "error", "message": str(ex)}).encode(), code=400)
+        else:
+            self._send(b"not found", "text/plain", 404)
 
 def start_http():
-    HTTPServer(("127.0.0.1", HTTP_PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler).serve_forever()
 
 # ---------------- menu bar (rumps) ----------------
 class ClipApp(rumps.App):
@@ -420,6 +615,7 @@ class ClipApp(rumps.App):
             self.mic_items[d["name"]] = it
         self.menu = [
             rumps.MenuItem("Trigger Clip Now", callback=self.trigger),
+            rumps.MenuItem("Open Dashboard…", callback=lambda _: subprocess.run(["open", f"http://localhost:{HTTP_PORT}/"])),
             self.pause_item, None,
             self.title_item, self.game_item, None,
             self.mic_menu,

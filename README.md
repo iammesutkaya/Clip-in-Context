@@ -24,17 +24,25 @@ python3 clip_backtrack.py
 ```
 A 🎙️ icon appears in the menu bar. Grant microphone access the first time.
 
+## Dashboard
+Menu bar → **Open Dashboard…** (or visit `http://localhost:5001/`). Served by
+the built-in stdlib HTTP server — no extra dependency. It has a **live mic VU
+meter** (instant confirmation the mic works), the trigger button, latest title +
+transcript, live Twitch category, and a full settings form (streamer, mic
+device, custom words, YouTube, privacy, preferences). Settings save straight to
+`config.json`; the OAuth secret is a password field and is never sent back to
+the browser.
+
 ## Trigger
-- Menu bar → **Trigger Clip Now**, or
+- Menu bar → **Trigger Clip Now**, dashboard button, or
 - HTTP (Stream Deck / hotkey / Aitum): `GET http://localhost:5001/clip?duration=30&game=Valorant`
 - Also `GET /pause` and `/resume`.
 
 ## Config
-Menu bar covers mic device, YouTube on/off, credentials, and auth. Everything
-else (streamer name, Twitch channel, custom words, default game, upload privacy,
-OBS clips dir) lives in `config.json` — **Edit Settings** opens it, **Reload
-Settings** applies it. Secrets (`config.json`, `client_secret.json`,
-`youtube_token.json`) are gitignored.
+Edit from the dashboard, or the menu bar (mic, YouTube toggle/creds/auth), or
+`config.json` directly (**Edit Settings** / **Reload Settings** in the menu).
+Secrets (`config.json`, `client_secret.json`, `youtube_token.json`) are
+gitignored.
 
 ## Optional: auto-start
 Add a `~/Library/LaunchAgents` plist running `python3 .../clip_backtrack.py`.
