@@ -307,8 +307,8 @@ def health_loop():
         time.sleep(5)
 
 def transcribe_long(audio, **kw):
-    """Transcribe in 5s chunks (the window that stays stable) and stitch — long
-    single-pass transcription hallucinates repeat loops on quiet stretches."""
+    """Transcribe in 5s chunks (the window that stays stable) and stitch — used
+    only as a fallback when the full-context pass hallucinates a repeat loop."""
     step = SAMPLE_RATE * 5
     parts = []
     for i in range(0, audio.size, step):
@@ -320,6 +320,14 @@ def transcribe_long(audio, **kw):
             parts.append(t)
     return " ".join(parts)
 
+def transcribe_clip(audio, **kw):
+    """One full-context pass over the whole clip so the title sees everything
+    that was said. Only fall back to stitched 5s chunks if that pass loops."""
+    one = dedup(" ".join(transcribe(boost(audio), **kw).get("text", "").split()))
+    if re.search(r"[a-z0-9]", one.lower()) and not repetitive(one):
+        return one
+    return dedup(transcribe_long(audio, **kw))
+
 def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     """Transcribe last `duration` s → title. Returns (title, raw_transcript)."""
     global last_title, last_raw
@@ -330,7 +338,7 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
         return last_title, last_raw
     jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
     with transcribe_lock:
-        text = dedup(transcribe_long(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}"))
+        text = transcribe_clip(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
     if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
         last_title, last_raw = "Awesome Stream Moment", "No clear speech"
         return last_title, last_raw
