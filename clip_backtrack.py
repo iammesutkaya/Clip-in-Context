@@ -600,7 +600,10 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <details class="set">
     <summary>🕒 Recent clips</summary>
-    <div class="setbody" id="history" style="display:flex;flex-direction:column;gap:2px;font-size:13px">No clips yet.</div>
+    <div class="setbody">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="mini" onclick="clearHistory()">Clear all</button></div>
+      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:13px">No clips yet.</div>
+    </div>
   </details>
 
   <details class="set">
@@ -644,6 +647,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <script>
 const $=id=>document.getElementById(id);
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+async function clearHistory(){if(!confirm('Clear all clip history?'))return;await fetch('/api/history/clear',{method:'POST'});loadHistory();}
 async function loadHistory(){try{const h=await(await fetch('/api/history')).json();
   $('history').innerHTML=h.length?h.map(c=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:8px 0"><span style="color:var(--blue);font-weight:600">${esc(c.title)}</span><span style="color:var(--dim);white-space:nowrap">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join(''):'No clips yet.';
 }catch(e){}}
@@ -827,13 +831,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(b"not found", "text/plain", 404)
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path == "/settings":
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/settings":
             n = int(self.headers.get("Content-Length", 0))
             try:
                 apply_settings(json.loads(self.rfile.read(n) or b"{}"))
                 self._send(b'{"status":"saved"}')
             except Exception as ex:
                 self._send(json.dumps({"status": "error", "message": str(ex)}).encode(), code=400)
+        elif path == "/api/history/clear":
+            global clip_history
+            clip_history = []
+            try:
+                open(CLIPS_LOG, "w").close()
+            except Exception:
+                pass
+            self._send(b'{"status":"cleared"}')
         else:
             self._send(b"not found", "text/plain", 404)
 
