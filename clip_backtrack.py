@@ -72,6 +72,8 @@ MAX_TITLE_LENGTH = 50
 
 recording_paused = False
 mic_volume = 0.0
+live_text = ""                       # continuous live caption (title is clip-only)
+transcribe_lock = threading.Lock()   # MLX isn't reentrant; serialize live loop vs clip trigger
 
 class RingBuffer:
     """Fixed float32 ring buffer, last BUFFER_SECONDS seconds at 16 kHz."""
@@ -256,8 +258,9 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
         last_title, last_raw = "Stream Highlight", "No mic speech detected"
         return last_title, last_raw
     jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
-    res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
-                                 initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
+    with transcribe_lock:
+        res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL,
+                                     initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
     text = " ".join(res.get("text", "").split())
     if not re.search(r"[a-z0-9]", text.lower()):   # empty or punctuation-only (silence artifact)
         last_title, last_raw = "Awesome Stream Moment", "No clear speech"
@@ -429,6 +432,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   </div>
 
   <div class="card">
+    <div class="lbl">💬 Live captions</div>
+    <div class="scriptbox" id="live" style="font-style:normal;color:var(--txt);min-height:44px">Listening…</div>
+  </div>
+
+  <div class="card">
     <div class="lbl">📌 Latest clip title</div>
     <div class="title"><span id="ttl">No clip yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
     <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
@@ -473,6 +481,7 @@ setInterval(async()=>{try{
   let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
   $('vu').style.width=p+'%';$('vupct').textContent=p+'%';
   $('cat').textContent=s.category||'auto';
+  if(s.live)$('live').textContent=s.live;
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Recording';l.classList.remove('off');}
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
@@ -524,10 +533,30 @@ def apply_settings(data):
     if mic_changed:
         threading.Thread(target=start_stream, daemon=True).start()
 
+def live_loop():
+    """Continuously transcribe the last few seconds for live captions (no title)."""
+    global live_text
+    while True:
+        time.sleep(2.0)
+        if recording_paused:
+            continue
+        audio = ring.last(5)
+        if audio.size < SAMPLE_RATE or float(np.max(np.abs(audio))) < 0.01:
+            continue
+        try:
+            with transcribe_lock:
+                res = mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL)
+            t = " ".join(res.get("text", "").split())
+            if re.search(r"[a-z0-9]", t.lower()):
+                live_text = t
+        except Exception:
+            pass
+
 def status_json():
     return {
         "mic_volume": mic_volume,
         "paused": recording_paused,
+        "live": live_text,
         "last_title": last_title,
         "last_raw": last_raw,
         "category": detected_game,
@@ -684,5 +713,6 @@ class ClipApp(rumps.App):
 if __name__ == "__main__":
     start_stream()
     threading.Thread(target=start_http, daemon=True).start()
+    threading.Thread(target=live_loop, daemon=True).start()
     print(f"READY — trigger: http://localhost:{HTTP_PORT}/clip")
     ClipApp().run()
