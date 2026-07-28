@@ -57,6 +57,7 @@ cp com.mesut.clipbacktrack.plist ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.mesut.clipbacktrack.plist
 # build the double-clickable launcher
 osacompile -o "Clip Backtrack.app" -e 'do shell script "launchctl kickstart gui/$(id -u)/com.mesut.clipbacktrack"'
+cp AppIcon.icns "Clip Backtrack.app/Contents/Resources/applet.icns"   # app icon
 ```
 Move **Clip Backtrack.app** to /Applications if you like. Logs: `/tmp/clipbacktrack.log`.
 If captions ever stay silent, grant **Python** in System Settings → Privacy &
