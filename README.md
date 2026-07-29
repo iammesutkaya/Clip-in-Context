@@ -41,6 +41,13 @@ model downloads automatically on first run.
 - **Dashboard:** menu bar → **Open Dashboard…** or `http://localhost:5001/` —
   live captions, mic meter, trigger, recent clips, engine status, and settings.
 
+### Dock it inside OBS
+The dashboard works great as an OBS **custom browser dock** (fully interactive,
+unlike a browser source): **OBS → Docks → Custom Browser Docks…** → name it
+"Clip in Context", URL `http://localhost:5001` → Apply. The trigger button, live
+captions, and recent clips now live right in your OBS window. The layout adapts
+to narrow dock widths.
+
 ### Design note
 One Python process, launched via launchd's GUI session, so it inherits
 microphone permission — **no signed `.app`, no Swift, no code signing, no macOS

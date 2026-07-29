@@ -556,6 +556,17 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   details.set summary::after{content:'';width:14px;height:14px;background:var(--chev) center/14px no-repeat;transition:transform .2s}
   details.set[open] summary::after{transform:rotate(180deg)}
   details.set .setbody{padding:0 20px 22px}
+  /* narrow widths (e.g. an OBS custom browser dock) */
+  @media (max-width:520px){
+    body{padding:14px 10px}
+    .wrap{gap:12px}
+    .card{padding:14px}
+    .row{flex-wrap:wrap}
+    .flex{flex-direction:column;gap:0}
+    h1{font-size:17px}
+    .go{font-size:15px;padding:13px}
+    details.set summary,details.set .setbody{padding-left:14px;padding-right:14px}
+  }
 </style></head><body><div class="wrap">
 
   <div class="card row">
