@@ -577,7 +577,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="live" class="pill">● Running</span>
       <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
-      <button class="mini" style="background:#3a1f2b;color:#f9a8c4" onclick="quitApp()">Quit</button>
+      <button class="mini" style="background:#3a1f2b;color:#f9a8c4" onclick="quitApp(this)">Quit</button>
     </div>
   </div>
 
@@ -615,7 +615,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <details class="set">
     <summary>🕒 Recent clips</summary>
     <div class="setbody">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="mini" onclick="clearHistory()">Clear all</button></div>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
       <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:13px">No clips yet.</div>
     </div>
   </details>
@@ -661,14 +661,23 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <script>
 const $=id=>document.getElementById(id);
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-async function clearHistory(){if(!confirm('Clear all clip history?'))return;await fetch('/api/history/clear',{method:'POST'});loadHistory();}
+async function clearHistory(btn){
+  if(!btn.dataset.armed){btn.dataset.armed='1';btn.textContent='Confirm?';setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Clear all';}},2500);return;}
+  delete btn.dataset.armed;btn.textContent='Clear all';
+  await fetch('/api/history/clear',{method:'POST'});loadHistory();
+}
 async function loadHistory(){try{const h=await(await fetch('/api/history')).json();
   $('history').innerHTML=h.length?h.map(c=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:8px 0"><span style="color:var(--blue);font-weight:600">${esc(c.title)}</span><span style="color:var(--dim);white-space:nowrap">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join(''):'No clips yet.';
 }catch(e){}}
 loadHistory();
 let paused=false;
 function togglePause(){fetch(paused?'/resume':'/pause');}
-function quitApp(){if(confirm('Quit Clip in Context? The menu bar app will close.')){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">Clip in Context stopped. You can close this tab.</p>';}}
+function quitApp(btn){
+  // In-page confirm: OBS's embedded browser (CEF) crashes on window.confirm().
+  if(btn.dataset.armed){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">Clip in Context stopped. You can close this tab.</p>';return;}
+  btn.dataset.armed='1';btn.textContent='Confirm?';
+  setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Quit';}},2500);
+}
 setInterval(async()=>{try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
