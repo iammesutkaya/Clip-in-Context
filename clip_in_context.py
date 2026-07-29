@@ -383,8 +383,11 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     if not title:
         if not ollama_ok:
             set_notice("Ollama unreachable — used a fallback title")
-        sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
-        title = (sentences[-1] if sentences else text)[:MAX_TITLE_LENGTH]
+        # Fallback: opening words of what was said (period-splitting mangled URLs
+        # like "www.fema.org" into "org").
+        title = " ".join(text.split()[:8])
+        if len(title) > MAX_TITLE_LENGTH:
+            title = title[:MAX_TITLE_LENGTH].rsplit(" ", 1)[0] + "…"
     title = clean(title)
     last_title, last_raw = title, text
     append_history(title, text)
