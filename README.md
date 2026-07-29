@@ -28,6 +28,11 @@ git clone <this-repo> clip-in-context && cd clip-in-context
 LaunchAgent, and builds a double-clickable **Clip in Context.app**. The Whisper
 model downloads automatically on first run.
 
+> **Don't put this in ~/Desktop, ~/Documents, or ~/Downloads.** macOS protects
+> those folders (TCC); a terminal without Files-and-Folders access can't write
+> there and setup fails with *"Operation not permitted"*. Clone it under your
+> home directory (e.g. `~/clip-in-context`) instead.
+
 ## Use
 - **Start:** double-click **Clip in Context.app** (move it to /Applications or the
   Dock). A waveform icon appears in the menu bar. Grant microphone access the

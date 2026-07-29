@@ -10,6 +10,17 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 command -v python3 >/dev/null || { echo "python3 not found — install it (e.g. brew install python)"; exit 1; }
 [ "$(uname -m)" = "arm64" ] || echo "⚠️  Not Apple Silicon — MLX Whisper needs an M-series Mac."
 
+# macOS protects ~/Desktop, ~/Documents, ~/Downloads (TCC). A terminal without
+# Files-and-Folders access can't write here → venv fails "Operation not permitted".
+case "$DIR/" in
+  "$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Downloads/"*)
+    echo "⚠️  This folder is in a macOS-protected location ($DIR)."
+    echo "    If setup fails with 'Operation not permitted', move it out of"
+    echo "    Desktop/Documents/Downloads (e.g. ~/) and re-run, or grant your"
+    echo "    terminal access in Settings → Privacy & Security → Files and Folders."
+    echo ;;
+esac
+
 echo "→ Creating venv + installing dependencies (this downloads a lot the first time)…"
 python3 -m venv .venv
 ./.venv/bin/pip install -q --upgrade pip
