@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 DIR="$(pwd)"
-LABEL="com.titledrop.app"
+LABEL="com.clipincontext.app"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 command -v python3 >/dev/null || { echo "python3 not found — install it (e.g. brew install python)"; exit 1; }
@@ -25,29 +25,29 @@ cat > "$PLIST" <<EOF
 <dict>
     <key>Label</key><string>$LABEL</string>
     <key>ProgramArguments</key>
-    <array><string>$PY</string><string>$DIR/titledrop.py</string></array>
+    <array><string>$PY</string><string>$DIR/clip_in_context.py</string></array>
     <key>WorkingDirectory</key><string>$DIR</string>
     <key>RunAtLoad</key><false/>
     <key>KeepAlive</key><false/>
-    <key>StandardOutPath</key><string>/tmp/titledrop.log</string>
-    <key>StandardErrorPath</key><string>/tmp/titledrop.log</string>
+    <key>StandardOutPath</key><string>/tmp/clipincontext.log</string>
+    <key>StandardErrorPath</key><string>/tmp/clipincontext.log</string>
 </dict>
 </plist>
 EOF
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load -w "$PLIST"
 
-echo "→ Building 'TitleDrop.app' launcher…"
-rm -rf "TitleDrop.app"
-osacompile -o "TitleDrop.app" -e "do shell script \"launchctl kickstart gui/\$(id -u)/$LABEL\"" >/dev/null
-[ -f AppIcon.icns ] && cp AppIcon.icns "TitleDrop.app/Contents/Resources/applet.icns"
+echo "→ Building 'Clip in Context.app' launcher…"
+rm -rf "Clip in Context.app"
+osacompile -o "Clip in Context.app" -e "do shell script \"launchctl kickstart gui/\$(id -u)/$LABEL\"" >/dev/null
+[ -f AppIcon.icns ] && cp AppIcon.icns "Clip in Context.app/Contents/Resources/applet.icns"
 
 cat <<DONE
 
 ✓ Done.
-  • Start:  double-click "TitleDrop.app" (or move it to /Applications).
+  • Start:  double-click "Clip in Context.app" (or move it to /Applications).
   • Stop:   Quit from the menu bar.
   • Needs:  Ollama running (ollama serve) with a model pulled (e.g. ollama pull llama3.2).
             The Whisper model downloads automatically on first run.
-  • Logs:   /tmp/titledrop.log
+  • Logs:   /tmp/clipincontext.log
 DONE

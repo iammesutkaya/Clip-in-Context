@@ -14,7 +14,7 @@ venv/
 .DS_Store
 
 # Double-clickable launcher (regenerate with osacompile — see README)
-TitleDrop.app/
+*.app/
 
 # Local clip history
 clips.jsonl

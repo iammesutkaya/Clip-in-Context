@@ -1,4 +1,4 @@
-# TitleDrop
+# Clip in Context
 
 Rolling mic transcript backtrack + AI clip titler for macOS streamers.
 
@@ -21,15 +21,15 @@ mic → rolling 30s buffer → (trigger) → MLX Whisper → AI title
 
 ## Install
 ```bash
-git clone <this-repo> titledrop && cd titledrop
+git clone <this-repo> clip-in-context && cd clip-in-context
 ./setup.sh
 ```
 `setup.sh` creates a venv, installs dependencies, registers an on-demand
-LaunchAgent, and builds a double-clickable **TitleDrop.app**. The Whisper
+LaunchAgent, and builds a double-clickable **Clip in Context.app**. The Whisper
 model downloads automatically on first run.
 
 ## Use
-- **Start:** double-click **TitleDrop.app** (move it to /Applications or the
+- **Start:** double-click **Clip in Context.app** (move it to /Applications or the
   Dock). A waveform icon appears in the menu bar. Grant microphone access the
   first time. It does **not** run at login — only when you launch it.
 - **Stop:** Quit from the menu bar.
@@ -72,10 +72,10 @@ load, Ollama unreachable, or a YouTube upload failed.
 
 ## Uninstall
 ```bash
-launchctl unload -w ~/Library/LaunchAgents/com.titledrop.app.plist
-rm ~/Library/LaunchAgents/com.titledrop.app.plist
+launchctl unload -w ~/Library/LaunchAgents/com.clipincontext.app.plist
+rm ~/Library/LaunchAgents/com.clipincontext.app.plist
 ```
-Then delete the folder and `TitleDrop.app`. Logs: `/tmp/titledrop.log`.
+Then delete the folder and `Clip in Context.app`. Logs: `/tmp/clipincontext.log`.
 
 ## License
 MIT — see [LICENSE](LICENSE).
