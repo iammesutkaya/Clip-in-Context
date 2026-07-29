@@ -667,8 +667,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
         <div><label>Upload limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
       <label>OBS clips folder</label><input id="obs_clips_dir" value="__OBS__">
-      <button type="button" class="mini" style="margin-top:12px" onclick="fetch('/upload')">⬆ Upload latest clip now</button>
-      <div style="font-size:12px;color:var(--dim);margin-top:6px">Or call <code>GET /upload</code> from Aitum after the vertical clip exports.</div>
+      <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:12px;padding:12px;font-size:14px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:10px">⬆&nbsp; Upload latest clip now</button>
+      <div style="font-size:12px;color:var(--dim);margin-top:8px">Or call <code>GET /upload</code> from Aitum after the vertical clip exports.</div>
 
       <div class="lbl" style="margin-top:24px">🔔 Preferences</div>
       <div class="chk"><label style="margin:0">Desktop notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
