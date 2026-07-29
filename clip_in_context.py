@@ -509,6 +509,36 @@ def upload_youtube_async(path, title, raw, game):
         set_notice(f"YouTube upload failed: {e}")
     threading.Thread(target=work, daemon=True).start()
 
+def safe_filename(name):
+    name = re.sub(r'[/:\\?%*|"<>\x00-\x1f]', "-", name).strip(" .-")
+    return (name[:80].rstrip() or "Clip")
+
+def rename_latest_to_title():
+    """Rename the newest clip in the OBS folder to the last AI title. Returns the
+    new path, or None. mtime is preserved so it stays 'newest' for /upload."""
+    path = find_latest_clip()
+    if not path:
+        set_notice("No clip found in the OBS clips folder to rename")
+        return None
+    if not last_title:
+        set_notice("No title yet — trigger a clip first")
+        return None
+    d, ext = os.path.dirname(path), os.path.splitext(path)[1]
+    base = safe_filename(last_title)
+    new = os.path.join(d, base + ext)
+    n = 2
+    while os.path.exists(new) and os.path.abspath(new) != os.path.abspath(path):
+        new = os.path.join(d, f"{base} ({n}){ext}"); n += 1
+    if os.path.abspath(new) == os.path.abspath(path):
+        return path
+    try:
+        os.rename(path, new)
+        set_notice(f"Renamed clip → {os.path.basename(new)}", "ok")
+        return new
+    except OSError as e:
+        set_notice(f"Rename failed: {e}")
+        return None
+
 def do_upload():
     """Upload the newest exported clip with the last generated title. Call this
     AFTER the vertical clip is exported (e.g. an Aitum webhook after 'Create
@@ -870,6 +900,9 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/upload":
             threading.Thread(target=do_upload, daemon=True).start()
             self._send(b'{"status":"uploading"}')
+        elif u.path == "/name":
+            threading.Thread(target=rename_latest_to_title, daemon=True).start()
+            self._send(b'{"status":"renaming"}')
         elif u.path == "/pause":
             globals().__setitem__("recording_paused", True); self._send(b'{"status":"paused"}')
         elif u.path == "/resume":
