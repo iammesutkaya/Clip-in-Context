@@ -86,8 +86,9 @@ transcribe_lock = threading.Lock()   # MLX isn't reentrant; serialize live loop 
 whisper_ok = False                   # True once MLX has transcribed successfully
 whisper_err = False                  # True if the model failed to load
 ollama_ok = False                    # True while Ollama is reachable (health thread)
-notice = ""                          # transient warning shown on the dashboard
+notice = ""                          # transient banner shown on the dashboard
 notice_ts = 0.0
+notice_level = "warn"                # "warn" (red) or "ok" (green)
 clip_history = []                    # recent clips: {"t":epoch,"title","raw"}, newest last
 CLIPS_LOG = os.path.join(HERE, "clips.jsonl")
 if os.path.exists(CLIPS_LOG):
@@ -97,10 +98,10 @@ if os.path.exists(CLIPS_LOG):
     except Exception:
         clip_history = []
 
-def set_notice(msg):
-    global notice, notice_ts
-    notice, notice_ts = msg, time.time()
-    print(f"⚠️ {msg}")
+def set_notice(msg, level="warn"):
+    global notice, notice_ts, notice_level
+    notice, notice_ts, notice_level = msg, time.time(), level
+    print(("✅ " if level == "ok" else "⚠️ ") + msg)
 
 def append_history(title, raw):
     global clip_history
@@ -400,10 +401,8 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
             f'display notification "{safe}" with title "🎬 Clip in Context" subtitle "Copied to clipboard"'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     send_to_aitum(title)
-    if cfg["enable_yt"]:
-        path = find_latest_clip()
-        if path:
-            upload_youtube_async(path, title, text, game)
+    # NB: no auto-upload here — it would race clip creation. YouTube upload is a
+    # separate step: GET /upload (Aitum webhook after the vertical clip exports).
     return title, text
 
 # ---------------- Aitum ----------------
@@ -422,7 +421,9 @@ def send_to_aitum(title):
         print(f"⚠️ aitum: {e}")
 
 # ---------------- YouTube ----------------
-def find_latest_clip():
+def find_latest_clip(max_age=None):
+    """Newest video in the OBS clips folder. max_age (seconds) optionally limits
+    to recently-modified files; None = newest regardless of age."""
     d = os.path.expanduser(cfg["obs_clips_dir"])
     if not os.path.isdir(d):
         return None
@@ -435,7 +436,9 @@ def find_latest_clip():
                     m = os.path.getmtime(p)
                 except OSError:
                     continue
-                if now - m <= 300 and m > best_m:
+                if max_age is not None and now - m > max_age:
+                    continue
+                if m > best_m:
                     best, best_m = p, m
     return best
 
@@ -499,10 +502,26 @@ def upload_youtube_async(path, title, raw, game):
             wait = chunk / (cfg["max_upload_kbps"] * 1024) - (time.time() - t0)
             if wait > 0:
                 time.sleep(wait)
-        print(f"✅ https://youtu.be/{resp['id']}")
+        url = f"https://youtu.be/{resp['id']}"
+        print(f"✅ {url}")
+        set_notice(f"Uploaded to YouTube: {url}", "ok")
       except Exception as e:
         set_notice(f"YouTube upload failed: {e}")
     threading.Thread(target=work, daemon=True).start()
+
+def do_upload():
+    """Upload the newest exported clip with the last generated title. Call this
+    AFTER the vertical clip is exported (e.g. an Aitum webhook after 'Create
+    vertical clip') so it isn't raced against clip creation."""
+    if not cfg["enable_yt"]:
+        set_notice("YouTube upload is off — enable it in Settings")
+        return
+    path = find_latest_clip()
+    if not path:
+        set_notice("No clip found in the OBS clips folder to upload")
+        return
+    set_notice(f"Uploading {os.path.basename(path)}…", "ok")
+    upload_youtube_async(path, last_title or "Stream Highlight", last_raw, detected_game)
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
 PAGE = """<!DOCTYPE html><html lang="en"><head>
@@ -648,6 +667,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
         <div><label>Upload limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
       <label>OBS clips folder</label><input id="obs_clips_dir" value="__OBS__">
+      <button type="button" class="mini" style="margin-top:12px" onclick="fetch('/upload')">⬆ Upload latest clip now</button>
+      <div style="font-size:12px;color:var(--dim);margin-top:6px">Or call <code>GET /upload</code> from Aitum after the vertical clip exports.</div>
 
       <div class="lbl" style="margin-top:24px">🔔 Preferences</div>
       <div class="chk"><label style="margin:0">Desktop notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
@@ -688,7 +709,9 @@ setInterval(async()=>{try{
   $('whDot').style.color=s.whisper_err?'#f87171':(s.whisper?'var(--ok)':'#fbbf24');
   $('whTxt').textContent=s.whisper_err?'error':(s.whisper?'ready':'loading…');
   $('olDot').style.color=s.ollama?'var(--ok)':'#f87171';$('olTxt').textContent=s.ollama?'up':'down';
-  if(s.notice){$('noticeMsg').textContent='⚠ '+s.notice;$('notice').style.display='flex';}
+  if(s.notice){const n=$('notice'),ok=s.notice_level==='ok';
+    n.style.borderColor=ok?'#14503b':'#7c2d12';n.style.background=ok?'#0e2a20':'#2a1206';n.style.color=ok?'#6ee7b7':'#fca5a5';
+    $('noticeMsg').textContent=(ok?'✅ ':'⚠ ')+s.notice;n.style.display='flex';}
   const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Running';l.classList.remove('off');}
   paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
   if(s.last_title){$('ttl').textContent=s.last_title;}
@@ -773,6 +796,7 @@ def status_json():
         "whisper_err": whisper_err,
         "ollama": ollama_ok,
         "notice": notice if (time.time() - notice_ts < 30) else "",
+        "notice_level": notice_level,
         "live": live_text,
         "last_title": last_title,
         "last_raw": last_raw,
@@ -843,6 +867,9 @@ class Handler(BaseHTTPRequestHandler):
             dur = max(5, min(BUFFER_SECONDS, int(q.get("duration", [DEFAULT_CLIP_SECONDS])[0])))
             title, raw = make_clip(dur, q.get("game", [""])[0])
             self._send(json.dumps({"title": title, "raw_transcript": raw}))
+        elif u.path == "/upload":
+            threading.Thread(target=do_upload, daemon=True).start()
+            self._send(b'{"status":"uploading"}')
         elif u.path == "/pause":
             globals().__setitem__("recording_paused", True); self._send(b'{"status":"paused"}')
         elif u.path == "/resume":
