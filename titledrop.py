@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-clip_backtrack.py — rolling mic transcript backtrack + AI clip titler (macOS).
+titledrop.py — TitleDrop: speech → AI clip title → clipboard/overlay/YouTube (macOS).
 
 One terminal-launched process. That is the whole design decision: launched from
 the terminal (or a LaunchAgent) it inherits microphone permission, so there is
@@ -10,7 +10,7 @@ no .app bundle, no code signing, and no TCC silence. Menu bar via rumps.
         → clipboard + notification → Aitum → optional YouTube Short
 
 Trigger: menu bar item, or HTTP  GET http://localhost:5001/clip?duration=30&game=Valorant
-Run:     python3 clip_backtrack.py
+Run:     python3 titledrop.py
 """
 import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -394,7 +394,7 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     if cfg["enable_notif"]:
         safe = title.replace("\\", "\\\\").replace('"', '\\"')  # AppleScript string-escape
         subprocess.run(["osascript", "-e",
-            f'display notification "{safe}" with title "🎬 Clip Backtrack" subtitle "Copied to clipboard"'],
+            f'display notification "{safe}" with title "🎬 TitleDrop" subtitle "Copied to clipboard"'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     send_to_aitum(title)
     if cfg["enable_yt"]:
@@ -504,7 +504,7 @@ def upload_youtube_async(path, title, raw, game):
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
 PAGE = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Clip Backtrack</title>
+<title>TitleDrop</title>
 <style>
   :root{--bg:#0b0d12;--card:#141821;--line:#232a38;--txt:#e8edf5;--dim:#8b96a8;
     --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#34d399;--radius:16px;
@@ -559,7 +559,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 </style></head><body><div class="wrap">
 
   <div class="card row">
-    <h1>🎬 Clip Backtrack</h1>
+    <h1>🎬 TitleDrop</h1>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="live" class="pill">● Running</span>
       <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
@@ -654,7 +654,7 @@ async function loadHistory(){try{const h=await(await fetch('/api/history')).json
 loadHistory();
 let paused=false;
 function togglePause(){fetch(paused?'/resume':'/pause');}
-function quitApp(){if(confirm('Quit Clip Backtrack? The menu bar app will close.')){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">Clip Backtrack stopped. You can close this tab.</p>';}}
+function quitApp(){if(confirm('Quit TitleDrop? The menu bar app will close.')){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">TitleDrop stopped. You can close this tab.</p>';}}
 setInterval(async()=>{try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
@@ -856,7 +856,7 @@ def start_http():
 # ---------------- menu bar (rumps) ----------------
 class ClipApp(rumps.App):
     def __init__(self):
-        super().__init__("Clip Backtrack", quit_button=None)
+        super().__init__("TitleDrop", quit_button=None)
         self._symbol("waveform")   # SF Symbol menu-bar icon (shown when the status bar builds)
         self.title_item = rumps.MenuItem("Last Title: (none)")
         self.game_item = rumps.MenuItem("Category: (auto)")
@@ -893,7 +893,7 @@ class ClipApp(rumps.App):
         save_config()
         self.sync_mic_checks()
         threading.Thread(target=start_stream, daemon=True).start()
-        rumps.notification("Clip Backtrack", "Microphone", sender.title)
+        rumps.notification("TitleDrop", "Microphone", sender.title)
 
     def _symbol(self, name):
         """Set the menu-bar icon to an SF Symbol (template so it adapts to light/dark)."""
@@ -937,7 +937,7 @@ class ClipApp(rumps.App):
         save_config()
         if cfg["google_client_id"] and cfg["google_client_secret"]:
             write_client_secret()
-        rumps.notification("Clip Backtrack", "YouTube", "Credentials saved")
+        rumps.notification("TitleDrop", "YouTube", "Credentials saved")
 
     def auth_yt(self, _):
         threading.Thread(target=youtube_service, daemon=True).start()

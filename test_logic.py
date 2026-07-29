@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-checks for the non-trivial pure logic. Run: python3 test_logic.py"""
 import numpy as np
-import clip_backtrack as cb
+import titledrop as cb
 
 def test_dedup():
     assert cb.dedup("tricked tricked tricked go") == "tricked go"           # word stutter
