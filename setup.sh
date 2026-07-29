@@ -51,7 +51,17 @@ launchctl load -w "$PLIST"
 echo "→ Building 'Clip in Context.app' launcher…"
 rm -rf "Clip in Context.app"
 osacompile -o "Clip in Context.app" -e "do shell script \"launchctl kickstart gui/\$(id -u)/$LABEL\"" >/dev/null
-[ -f AppIcon.icns ] && cp AppIcon.icns "Clip in Context.app/Contents/Resources/applet.icns"
+# Set the app icon via NSWorkspace (modern osacompile stores its icon in an
+# asset catalog, so replacing applet.icns alone does nothing Finder shows).
+if [ -f AppIcon.icns ]; then
+  "$PY" - "$DIR/AppIcon.icns" "$DIR/Clip in Context.app" <<'PYEOF'
+import sys
+from AppKit import NSWorkspace, NSImage
+NSWorkspace.sharedWorkspace().setIcon_forFile_options_(
+    NSImage.alloc().initWithContentsOfFile_(sys.argv[1]), sys.argv[2], 0)
+PYEOF
+  touch "Clip in Context.app"
+fi
 
 cat <<DONE
 
