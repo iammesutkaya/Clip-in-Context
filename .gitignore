@@ -21,7 +21,3 @@ clips.jsonl
 
 # Local design/scratch archive (not published)
 archive/
-
-# Local screenshots — ignore the folder, except shots referenced by the README
-screenshots/*
-!screenshots/260730_clip-in-context.png
