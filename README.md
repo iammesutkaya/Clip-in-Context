@@ -12,6 +12,10 @@ mic → rolling 30s buffer → (trigger) → MLX Whisper → AI title
     → clipboard + notification → Aitum → optional YouTube Short
 ```
 
+<img src="screenshots/260730_clip-in-context.png" alt="Clip in Context dashboard — live captions, trigger, generated title and settings" width="420">
+
+*The dashboard, sized for an OBS custom browser dock.*
+
 ## Requirements
 - **Apple Silicon Mac** (MLX Whisper needs an M-series chip).
 - **[Ollama](https://ollama.com)** for AI titles: `ollama serve` running, with a
