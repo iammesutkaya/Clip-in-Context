@@ -593,18 +593,21 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   #cap{font-style:normal;color:var(--txt);height:67px}   /* 3 lines */
   .metarow{display:flex;justify-content:space-between;align-items:center;margin-top:6px;
     padding:6px 12px;font-size:12px;color:var(--dim)}
-  /* Settings sub-sections: only one short group open at a time, so the form
-     never overflows the dock. */
-  details.sub{border-top:1px solid var(--card-border)}
-  details.sub:first-of-type{border-top:none}
-  details.sub summary{list-style:none;cursor:pointer;padding:11px 2px;font-size:11px;
-    letter-spacing:.06em;text-transform:uppercase;font-weight:700;color:var(--dim);
-    display:flex;justify-content:space-between;align-items:center}
-  details.sub summary::-webkit-details-marker{display:none}
-  details.sub summary::after{content:'';width:12px;height:12px;
-    background:var(--chev) center/12px no-repeat;transition:transform .2s}
-  details.sub[open] summary::after{transform:rotate(180deg)}
-  details.sub .subbody{padding:0 2px 14px}
+  /* Settings tabs: one panel at a time in a stable frame — switching tabs
+     doesn't shift the sections around the way expanding accordions did. */
+  .tabs{display:flex;gap:4px;margin:2px 0 12px;background:#0d0f14;
+    border:1px solid var(--card-border);border-radius:9px;padding:3px}
+  .tab{flex:1;padding:7px 2px;font-size:10px;font-weight:700;letter-spacing:.03em;
+    text-transform:uppercase;color:var(--dim);background:none;border:none;border-radius:6px;
+    cursor:pointer;transition:background .15s,color .15s;white-space:nowrap}
+  .tab:hover{color:var(--txt)}
+  .tab.on{background:#222a38;color:var(--txt)}
+  .tabpanel{display:none}
+  .tabpanel.on{display:block}
+  /* Min-height keeps the frame (and the Save button) roughly put when switching
+     tabs. Panels are 56-352px naturally; 200 balances stability against dead
+     space on the short ones. */
+  .tabwrap{min-height:200px}
   
   button{font:inherit;cursor:pointer;border:none;border-radius:8px;color:#fff;font-weight:700;transition:all 0.15s ease}
   .go{width:100%;padding:0 16px;font-size:14px;line-height:40px;background:linear-gradient(135deg,var(--accent),var(--accent2));
@@ -712,7 +715,14 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <details class="set">
     <summary>⚙️ Settings</summary>
     <form class="setbody" onsubmit="save(event)">
-      <details class="sub"><summary>🎙️ Streamer &amp; Audio</summary><div class="subbody">
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab on" data-tab="0">🎙️ Audio</button>
+        <button type="button" class="tab" data-tab="1">🧠 AI</button>
+        <button type="button" class="tab" data-tab="2">🚀 YouTube</button>
+        <button type="button" class="tab" data-tab="3">🔔 Prefs</button>
+      </div>
+      <div class="tabwrap">
+      <div class="tabpanel on" data-panel="0">
       <label>Microphone Input Device</label>
       <div style="position:relative">
         <select id="mic_device" style="padding-left:24px">__MIC_OPTS__</select>
@@ -728,13 +738,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       </div>
       <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
 
-      </div></details>
-      <details class="sub"><summary>🧠 AI Models</summary><div class="subbody">
+      </div>
+      <div class="tabpanel" data-panel="1">
       <label>Transcription (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
       <label>Title Generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
 
-      </div></details>
-      <details class="sub"><summary>🚀 YouTube Shorts</summary><div class="subbody">
+      </div>
+      <div class="tabpanel" data-panel="2">
       <div class="chk"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
       <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
       <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
@@ -744,12 +754,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
       <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:10px;padding:10px;font-size:13px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:8px">⬆&nbsp; Upload Latest Clip Now</button>
 
-      </div></details>
-      <details class="sub"><summary>🔔 Preferences</summary><div class="subbody">
+      </div>
+      <div class="tabpanel" data-panel="3">
       <div class="chk"><label style="margin:0">Desktop Notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
       <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
 
-      </div></details>
+      </div>
+      </div>
       <button class="save" type="submit">💾 Save Settings</button>
     </form>
   </details>
@@ -761,9 +772,12 @@ const $=id=>document.getElementById(id);
 // grows past one open section. Closing Settings also resets its sub-sections.
 function exclusive(sel){const g=[...document.querySelectorAll(sel)];
   g.forEach(d=>d.addEventListener('toggle',()=>{if(d.open)g.forEach(o=>{if(o!==d)o.open=false;});}));}
-exclusive('details.set'); exclusive('details.sub');
-document.querySelectorAll('details.set').forEach(d=>d.addEventListener('toggle',()=>{
-  if(!d.open)d.querySelectorAll('details.sub').forEach(s=>s.open=false);}));
+exclusive('details.set');
+// Settings tabs
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  const i=t.dataset.tab;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+  document.querySelectorAll('.tabpanel').forEach(p=>p.classList.toggle('on',p.dataset.panel===i));}));
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 async function clearHistory(btn){
   if(!btn.dataset.armed){btn.dataset.armed='1';btn.textContent='Confirm?';setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Clear all';}},2500);return;}
