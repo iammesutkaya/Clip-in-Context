@@ -582,6 +582,9 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .title-box{height:40px;font-size:14px;font-weight:700;color:var(--blue);background:#0d0f14;border:1px solid var(--card-border);
     border-radius:8px;padding:0 6px 0 12px;word-break:break-word;display:flex;justify-content:space-between;align-items:center;gap:8px}
   .title-box span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Title picks up the Trigger button's gradient (solid accent as fallback). */
+  #ttl{color:var(--accent);background:linear-gradient(135deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   /* Fixed height so the layout never jumps, but multi-line so captions stay
      readable. Integer line-height + exact N-line heights (border-box: 16px
      padding + 2px borders) clip on a whole line — no half-line slivers.
