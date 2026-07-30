@@ -373,12 +373,16 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     game = game or live_twitch_game()
     audio = ring.last(duration)
     if audio.size < SAMPLE_RATE or float(np.max(np.abs(audio))) < 0.005:
+        # Nothing was captured, so there's no clip to log — say so, otherwise the
+        # trigger looks like it silently did nothing.
+        set_notice("No mic audio in the last %ds — check the mic in Settings" % duration)
         last_title, last_raw = "Stream Highlight", "No mic speech detected"
         return last_title, last_raw
     jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
     with transcribe_lock:
         text = transcribe_clip(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
     if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
+        set_notice("Audio had no recognisable speech — nothing to title")
         last_title, last_raw = "Awesome Stream Moment", "No clear speech"
         return last_title, last_raw
     title = ai_title(text, game)
@@ -999,6 +1003,14 @@ def dashboard_html():
     return page
 
 class Handler(BaseHTTPRequestHandler):
+    def handle_one_request(self):
+        # The dashboard polls every 150ms; a reload mid-response raises
+        # BrokenPipeError/ConnectionReset. Harmless — don't spam the log.
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
     def log_message(self, *a):
         pass
 
