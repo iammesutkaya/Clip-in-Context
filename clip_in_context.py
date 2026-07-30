@@ -653,6 +653,27 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .chip-tw:hover{background:rgba(145,70,255,.28)}
   .chip-tw:disabled{opacity:.5;cursor:default}
   .chip-tw span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Recent clips list */
+  .cliprow{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:8px;
+    cursor:pointer;transition:background .12s}
+  .cliprow:hover{background:#151a24}
+  .cliprow .t{flex:1;min-width:0;color:var(--txt);font-weight:600;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cliprow:hover .t{color:var(--blue)}
+  .cliprow .ts{flex:none;color:var(--dim);font-size:11px;font-variant-numeric:tabular-nums}
+  /* flex:1 (not height:100%) so it fills the reserved list area and centres in it */
+  .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:4px;color:var(--dim);text-align:center}
+  .empty b{font-size:13px;font-weight:600;color:#7c8798}
+  .empty span{font-size:11px;opacity:.75}
+  /* Secondary action button (e.g. manual upload) */
+  .btn2{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+    height:38px;margin-top:14px;font:inherit;font-size:13px;font-weight:600;
+    color:var(--txt);background:#1a2130;border:1px solid #2b3446;border-radius:9px;
+    cursor:pointer;transition:background .15s,border-color .15s}
+  .btn2:hover{background:#212a3c;border-color:#3a465c}
+  .btn2:disabled{opacity:.55;cursor:default}
+  .btn2 svg{flex:none;opacity:.85}
 </style></head><body><div class="wrap">
 
   <!-- UNIFIED HEADER & HOVER STATUS BAR -->
@@ -711,7 +732,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     </div><!-- /live panel -->
 
     <div class="tabpanel" data-panel="1">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
+      <div id="clearWrap" style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
       <!-- min-height matches the Live panel so the card doesn't resize between tabs -->
       <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:209px">No clips yet.</div>
     </div>
@@ -759,7 +780,10 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
         <div><label>Upload Limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
       <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
-      <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:10px;padding:10px;font-size:13px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:8px">⬆&nbsp; Upload Latest Clip Now</button>
+      <button type="button" id="upBtn" class="btn2" onclick="uploadLatest(this)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span>Upload Latest Clip</span>
+      </button>
 
       </div>
       </div>
@@ -790,7 +814,12 @@ async function clearHistory(btn){
   await fetch('/api/history/clear',{method:'POST'});loadHistory();
 }
 async function loadHistory(){try{const h=await(await fetch('/api/history')).json();
-  $('history').innerHTML=h.length?h.map(c=>`<div style="display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--card-border);padding:6px 0"><span style="color:var(--blue);font-weight:600">${esc(c.title)}</span><span style="color:var(--dim);white-space:nowrap">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join(''):'No clips yet.';
+  $('history').innerHTML = h.length
+    ? h.map(c=>`<div class="cliprow" title="Click to copy" data-title="${esc(c.title)}"><span class="t">${esc(c.title)}</span><span class="ts">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')
+    : '<div class="empty"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="opacity:.45;margin-bottom:2px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><b>No clips yet</b><span>Trigger a clip and it will show up here</span></div>';
+  $('clearWrap').style.visibility = h.length ? 'visible' : 'hidden';   // nothing to clear when empty
+  $('history').querySelectorAll('.cliprow').forEach(r=>r.addEventListener('click',()=>{
+    navigator.clipboard.writeText(r.dataset.title); toast('Copied');}));
 }catch(e){}}
 loadHistory();
 let paused=false;
@@ -829,6 +858,10 @@ async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.
   try{const d=await(await fetch('/clip?json=1')).json();
     if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
   b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
+async function uploadLatest(b){const label=b.querySelector('span'),was=label.textContent;
+  b.disabled=true;label.textContent='Uploading…';                 // result arrives as a banner
+  try{await fetch('/upload');}catch(e){}
+  setTimeout(()=>{b.disabled=false;label.textContent=was;},2000);}
 async function refreshCategory(){const b=$('catBtn');b.disabled=true;   // .chip-tw:disabled dims it
   try{const d=await(await fetch('/category')).json();if(d.category)$('cat').textContent=d.category;}catch(e){}
   b.disabled=false;}
