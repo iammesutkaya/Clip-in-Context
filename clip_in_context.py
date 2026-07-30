@@ -695,8 +695,12 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <div class="title-box"><span id="ttl">No clip generated yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
       <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
       <div class="metarow">
-        <span>🎮 Twitch Category</span>
-        <span id="cat" class="cat">auto</span>
+        <span style="display:flex;align-items:center;gap:7px;min-width:0">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="#9146FF" style="flex:none" aria-label="Twitch"><path d="M4.265 3 3 6.236v13.06h4.463V22h2.529l2.532-2.704h3.66L21 14.677V3H4.265zm1.686 1.685h13.365v9.135l-2.953 2.95h-4.464l-2.529 2.7v-2.7H5.951V4.685zm4.633 8.014h1.686V7.632h-1.686v5.067zm4.62 0h1.686V7.632h-1.686v5.067z"/></svg>
+          <span id="cat" class="cat" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">auto</span>
+        </span>
+        <button type="button" id="catBtn" class="mini" title="Re-check Twitch category"
+          style="padding:3px 8px;line-height:1;flex:none" onclick="refreshCategory()">↻</button>
       </div>
     </div>
 
@@ -821,6 +825,9 @@ async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.
   try{const d=await(await fetch('/clip?json=1')).json();
     if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
   b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
+async function refreshCategory(){const b=$('catBtn');b.disabled=true;b.style.opacity=.5;
+  try{const d=await(await fetch('/category')).json();if(d.category)$('cat').textContent=d.category;}catch(e){}
+  b.disabled=false;b.style.opacity=1;}
 function copyTitle(){const t=$('ttl').textContent.trim();
   if(!t||t==='No clip generated yet'){toast('No title yet');return;}
   navigator.clipboard.writeText(t);toast('Copied');}
@@ -984,6 +991,8 @@ class Handler(BaseHTTPRequestHandler):
             dur = max(5, min(BUFFER_SECONDS, int(q.get("duration", [cfg.get("default_duration", DEFAULT_CLIP_SECONDS)])[0])))
             title, raw = make_clip(dur, q.get("game", [""])[0])
             self._send(json.dumps({"title": title, "raw_transcript": raw}))
+        elif u.path == "/category":
+            self._send(json.dumps({"category": live_twitch_game()}))
         elif u.path == "/upload":
             threading.Thread(target=do_upload, daemon=True).start()
             self._send(b'{"status":"uploading"}')
