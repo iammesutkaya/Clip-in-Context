@@ -687,7 +687,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <div class="status-hover-wrap">
         <span id="live" class="pill" style="cursor:pointer">● Ready ▾</span>
         <div class="status-popover">
-          <div class="pop-row"><span>Whisper MLX</span><span><b id="whDot" style="color:var(--warn)">●</b> <span id="whTxt" style="color:var(--txt)">loading…</span></span></div>
+          <div class="pop-row"><span>MLX Whisper</span><span><b id="whDot" style="color:var(--warn)">●</b> <span id="whTxt" style="color:var(--txt)">loading…</span></span></div>
           <div class="pop-row"><span>Ollama LLM</span><span><b id="olDot" style="color:var(--warn)">●</b> <span id="olTxt" style="color:var(--txt)">down</span></span></div>
         </div>
       </div>
@@ -771,7 +771,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
       </div>
       <div class="tabpanel" data-panel="1">
-      <label>Transcription (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
+      <label>Transcription (MLX Whisper)</label><select id="whisper_model">__WHISPER_OPTS__</select>
       <label>Title Generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
       <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
 
