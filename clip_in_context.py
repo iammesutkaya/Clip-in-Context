@@ -712,7 +712,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <details class="set">
     <summary>⚙️ Settings</summary>
     <form class="setbody" onsubmit="save(event)">
-      <details class="sub" open><summary>🎙️ Streamer &amp; Audio</summary><div class="subbody">
+      <details class="sub"><summary>🎙️ Streamer &amp; Audio</summary><div class="subbody">
       <label>Microphone Input Device</label>
       <div style="position:relative">
         <select id="mic_device" style="padding-left:24px">__MIC_OPTS__</select>
@@ -757,6 +757,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <div id="toast" class="toast">Saved</div>
 <script>
 const $=id=>document.getElementById(id);
+// Exclusive accordions: opening one closes its siblings, so the dock never
+// grows past one open section. Closing Settings also resets its sub-sections.
+function exclusive(sel){const g=[...document.querySelectorAll(sel)];
+  g.forEach(d=>d.addEventListener('toggle',()=>{if(d.open)g.forEach(o=>{if(o!==d)o.open=false;});}));}
+exclusive('details.set'); exclusive('details.sub');
+document.querySelectorAll('details.set').forEach(d=>d.addEventListener('toggle',()=>{
+  if(!d.open)d.querySelectorAll('details.sub').forEach(s=>s.open=false);}));
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 async function clearHistory(btn){
   if(!btn.dataset.armed){btn.dataset.armed='1';btn.textContent='Confirm?';setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Clear all';}},2500);return;}
