@@ -619,7 +619,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .go:active{transform:translateY(1px)}
   .mini{background:#252a38;height:28px;line-height:28px;padding:0 10px;font-size:11px;border-radius:6px;color:var(--txt);display:inline-flex;align-items:center}
   .mini:hover{background:#31374a}
-  .save{width:100%;height:40px;line-height:40px;font-size:13px;background:linear-gradient(135deg,#6366f1,#3b82f6);margin-top:6px}
+  .save{width:100%;height:40px;line-height:40px;font-size:13px;background:linear-gradient(135deg,#6366f1,#3b82f6);margin-top:20px}
   label{font-size:11px;color:var(--dim);font-weight:600;display:block;margin:10px 0 4px}
   input,select{width:100%;background:#0d0f14;border:1px solid #2d3345;border-radius:8px;
     color:var(--txt);padding:0 10px;font:inherit;line-height:38px}
@@ -645,7 +645,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 </style></head><body><div class="wrap">
 
   <!-- UNIFIED HEADER & HOVER STATUS BAR -->
-  <div class="card row" style="padding:8px 12px;font-size:11px">
+  <div class="row" style="padding:2px 4px;font-size:11px">
     <div style="display:flex;align-items:center;gap:8px">
       <img src="/icon.png" style="width:20px;height:20px;border-radius:5px;object-fit:cover" alt="App Icon" title="Clip in Context">
       <div class="status-hover-wrap">
