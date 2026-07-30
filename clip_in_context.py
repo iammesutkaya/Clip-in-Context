@@ -34,6 +34,7 @@ cfg = {
     "twitch_channel": "",
     "custom_words": [],
     "default_game": "",
+    "default_duration": 30,              # default clip length in seconds (15, 30, 45, 60)
     "mic_device": "",                    # substring match; "" = system default
     "whisper_model": "mlx-community/whisper-large-v3-turbo",  # MLX Whisper repo
     "ollama_model": "llama3.2",          # model for jargon + title generation
@@ -558,153 +559,182 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Clip in Context</title>
 <style>
-  :root{--bg:#0b0d12;--card:#141821;--line:#232a38;--txt:#e8edf5;--dim:#8b96a8;
-    --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#34d399;--radius:16px;
-    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b96a8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")}
+  :root{--bg:#111319;--card:#181b24;--card-border:#262b3a;--txt:#f1f5f9;--dim:#94a3b8;
+    --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#10b981;--warn:#fbbf24;--err:#f87171;--radius:12px;
+    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")}
   *{box-sizing:border-box}
-  html{background:#0b0d12}
-  body{margin:0;min-height:100vh;
-    background:radial-gradient(1200px 600px at 50% -10%,#161b26,#0b0d12) no-repeat fixed #0b0d12;
-    color:var(--txt);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-    padding:28px 16px}
-  .wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
-  h1{font-size:19px;margin:0;display:flex;align-items:center;gap:9px}
-  .pill{font-size:12px;font-weight:700;padding:4px 11px;border-radius:20px;background:#0e2a20;color:var(--ok)}
-  .pill.off{background:#2a1416;color:#f87171}
-  .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:10px}
-  .vu{height:18px;border-radius:9px;background:#0b0f19;border:1px solid var(--line);overflow:hidden;flex:1}
-  .vu>i{display:block;height:100%;width:0;border-radius:9px;
-    background:linear-gradient(90deg,#10b981,#f59e0b,#ef4444);transition:width .08s linear}
-  .pct{min-width:42px;text-align:right;font-weight:700;color:var(--blue)}
-  .title{font-size:22px;font-weight:800;color:var(--blue);background:#0b0f19;border:1px solid var(--line);
-    border-radius:12px;padding:14px 16px;word-break:break-word;display:flex;justify-content:space-between;align-items:center;gap:10px}
-  .scriptbox{font-style:italic;color:var(--dim);background:#0e131c;border:1px solid var(--line);
-    border-radius:10px;padding:11px 14px;margin-top:10px;min-height:20px}
-  button{font:inherit;cursor:pointer;border:none;border-radius:12px;color:#fff;font-weight:700}
-  .go{width:100%;padding:15px;font-size:16px;margin-top:14px;
-    background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 8px 22px rgba(139,92,246,.35)}
+  html{background:var(--bg)}
+  body{margin:0;min-height:100vh;background:var(--bg);color:var(--txt);
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:12px 10px}
+  .wrap{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
+  .card{background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);padding:12px 14px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  h1{font-size:14px;font-weight:700;margin:0;display:flex;align-items:center;gap:8px}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:#064e3b;color:#34d399}
+  .pill.off{background:#451a1d;color:#f87171}
+  .status-badges{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);font-weight:600}
+  .lbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  .vu{height:5px;border-radius:3px;background:#0d0f14;border:1px solid var(--card-border);overflow:hidden;flex:1}
+  .vu>i{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,#10b981,#f59e0b,#ef4444);transition:width .08s linear}
+  
+  /* Standardized Harmonious Heights (40px Controls & Output Boxes) */
+  .control-h, input, select, .go{height:40px;box-sizing:border-box}
+  .title-box{height:40px;font-size:14px;font-weight:700;color:var(--blue);background:#0d0f14;border:1px solid var(--card-border);
+    border-radius:8px;padding:0 6px 0 12px;word-break:break-word;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .title-box span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Fixed height so the layout never jumps, but multi-line so captions stay
+     readable. Integer line-height + exact N-line heights (border-box: 16px
+     padding + 2px borders) clip on a whole line — no half-line slivers.
+     Deliberately not -webkit-line-clamp: it needs display:-webkit-box, which
+     some engines normalise away, leaving it inert. */
+  .scriptbox{font-style:italic;color:var(--dim);background:#0d0f14;border:1px solid var(--card-border);
+    border-radius:8px;padding:8px 12px 0;margin-top:6px;font-size:13px;line-height:19px;
+    overflow:hidden;height:48px}                    /* 2 lines: 2*19 + 8 top pad + 2 border */
+  #cap{font-style:normal;color:var(--txt);height:67px}   /* 3 lines */
+  .metarow{display:flex;justify-content:space-between;align-items:center;margin-top:6px;
+    padding:6px 12px;font-size:12px;color:var(--dim)}
+  
+  button{font:inherit;cursor:pointer;border:none;border-radius:8px;color:#fff;font-weight:700;transition:all 0.15s ease}
+  .go{width:100%;padding:0 16px;font-size:14px;line-height:40px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    box-shadow:0 3px 10px rgba(139,92,246,.25);display:flex;align-items:center;justify-content:center}
+  .go:hover{opacity:0.95}
   .go:active{transform:translateY(1px)}
-  .mini{background:#2a3345;padding:6px 12px;font-size:12px;border-radius:8px}
-  .save{width:100%;padding:14px;font-size:15px;background:linear-gradient(135deg,#6366f1,#3b82f6);margin-top:6px}
-  label{font-size:13px;color:var(--dim);font-weight:600;display:block;margin:14px 0 6px}
-  input,select{width:100%;background:#0b0d12;border:1px solid #313b4d;border-radius:9px;
-    color:var(--txt);padding:10px 12px;font:inherit}
-  select{appearance:none;-webkit-appearance:none;padding-right:34px;
-    background-image:var(--chev);background-repeat:no-repeat;background-position:right 12px center;background-size:13px}
-  input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
-  .flex{display:flex;gap:14px}.flex>div{flex:1}
-  .chk{display:flex;align-items:center;justify-content:space-between;margin:12px 0}
-  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(80px);
-    background:#0e2a20;color:var(--ok);border:1px solid #14503b;padding:11px 20px;border-radius:12px;
-    font-weight:700;transition:transform .25s;opacity:0}
+  .mini{background:#252a38;height:28px;line-height:28px;padding:0 10px;font-size:11px;border-radius:6px;color:var(--txt);display:inline-flex;align-items:center}
+  .mini:hover{background:#31374a}
+  .save{width:100%;height:40px;line-height:40px;font-size:13px;background:linear-gradient(135deg,#6366f1,#3b82f6);margin-top:6px}
+  label{font-size:11px;color:var(--dim);font-weight:600;display:block;margin:10px 0 4px}
+  input,select{width:100%;background:#0d0f14;border:1px solid #2d3345;border-radius:8px;
+    color:var(--txt);padding:0 10px;font:inherit;line-height:38px}
+  select{appearance:none;-webkit-appearance:none;padding-right:28px;
+    background-image:var(--chev);background-repeat:no-repeat;background-position:right 10px center;background-size:12px}
+  input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
+  .flex{display:flex;gap:8px}.flex>div{flex:1}
+  .chk{display:flex;align-items:center;justify-content:space-between;margin:8px 0}
+  .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(80px);
+    background:#064e3b;color:#34d399;border:1px solid #047857;padding:8px 16px;border-radius:8px;
+    font-weight:700;transition:transform .2s;opacity:0;z-index:99}
   .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
   .cat{color:var(--blue);font-weight:700}
-  details.set{background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
-  details.set summary{list-style:none;cursor:pointer;padding:16px 20px;font-size:11px;letter-spacing:.08em;
+  /* Status Hover Popover */
+  .status-hover-wrap{position:relative;display:inline-flex;align-items:center}
+  .status-popover{display:none;position:absolute;top:calc(100% + 6px);left:0;
+    background:#181b24;border:1px solid #262b3a;border-radius:10px;padding:10px 12px;
+    width:210px;box-shadow:0 10px 25px rgba(0,0,0,0.5);z-index:100;font-size:11px;color:var(--dim);
+    flex-direction:column;gap:6px}
+  .status-hover-wrap:hover .status-popover{display:flex}
+  .pop-row{display:flex;justify-content:space-between;align-items:center}
+  .pop-row span:last-child{font-weight:600;color:var(--txt)}
+
+  details.set{background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius)}
+  details.set summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:10px;letter-spacing:.06em;
     text-transform:uppercase;font-weight:700;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
   details.set summary::-webkit-details-marker{display:none}
-  details.set summary::after{content:'';width:14px;height:14px;background:var(--chev) center/14px no-repeat;transition:transform .2s}
+  details.set summary::after{content:'';width:12px;height:12px;background:var(--chev) center/12px no-repeat;transition:transform .2s}
   details.set[open] summary::after{transform:rotate(180deg)}
-  details.set .setbody{padding:0 20px 22px}
-  /* narrow widths (e.g. an OBS custom browser dock) */
-  @media (max-width:520px){
-    body{padding:14px 10px}
-    .wrap{gap:12px}
-    .card{padding:14px}
-    .row{flex-wrap:wrap}
-    .flex{flex-direction:column;gap:0}
-    h1{font-size:17px}
-    .go{font-size:15px;padding:13px}
-    details.set summary,details.set .setbody{padding-left:14px;padding-right:14px}
-  }
+  details.set .setbody{padding:0 12px 14px}
 </style></head><body><div class="wrap">
 
-  <div class="card row">
-    <h1>🎬 Clip in Context</h1>
-    <div style="display:flex;gap:8px;align-items:center">
-      <span id="live" class="pill">● Running</span>
+  <!-- UNIFIED HEADER & HOVER STATUS BAR -->
+  <div class="card row" style="padding:8px 12px;font-size:11px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <img src="/icon.png" style="width:20px;height:20px;border-radius:5px;object-fit:cover" alt="App Icon" title="Clip in Context">
+      <div class="status-hover-wrap">
+        <span id="live" class="pill" style="cursor:pointer">● Ready ▾</span>
+        <div class="status-popover">
+          <div class="pop-row"><span>Whisper MLX</span><span><b id="whDot" style="color:var(--warn)">●</b> <span id="whTxt" style="color:var(--txt)">loading…</span></span></div>
+          <div class="pop-row"><span>Ollama LLM</span><span><b id="olDot" style="color:var(--warn)">●</b> <span id="olTxt" style="color:var(--txt)">down</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
       <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
-      <button class="mini" style="background:#3a1f2b;color:#f9a8c4" onclick="quitApp(this)">Quit</button>
+      <button class="mini" style="background:#451a1d;color:#fca5a5" onclick="quitApp(this)">Quit</button>
     </div>
   </div>
 
-  <div class="card row" style="padding:13px 20px;font-size:13px;color:var(--dim);flex-wrap:wrap;gap:14px">
-    <span style="display:flex;gap:22px">
-      <span><b id="whDot" style="color:#fbbf24">●</b> Whisper <span id="whTxt">…</span></span>
-      <span><b id="olDot" style="color:#fbbf24">●</b> Ollama <span id="olTxt">…</span></span>
-    </span>
-    <span>🎮 <span id="cat" class="cat">…</span></span>
-  </div>
-
-  <div id="notice" class="card" style="display:none;border-color:#7c2d12;background:#2a1206;color:#fca5a5;padding:11px 16px;font-size:13px;align-items:center;justify-content:space-between;gap:12px;flex-direction:row">
+  <div id="notice" class="card" style="display:none;border-color:#7c2d12;background:#2a1206;color:#fca5a5;padding:8px 12px;font-size:12px;align-items:center;justify-content:space-between;gap:8px;flex-direction:row">
     <span id="noticeMsg"></span>
     <button class="mini" style="background:#4a1d1d;color:#fca5a5" onclick="$('notice').style.display='none'">Dismiss</button>
   </div>
 
-  <div class="card">
-    <div class="row" style="margin-bottom:10px">
-      <div class="lbl" style="margin:0">💬 Live captions</div>
-      <div class="vu" title="Mic level" style="flex:none;width:96px;height:6px"><i id="vu"></i></div>
+  <!-- CORE ACTION PANEL -->
+  <div class="card" style="display:flex;flex-direction:column;gap:10px">
+    
+    <!-- LIVE CAPTIONS & VU METER -->
+    <div>
+      <div class="row" style="margin-bottom:4px">
+        <div class="lbl" style="margin:0">💬 Live Speech</div>
+        <div class="vu" title="Mic Level" style="flex:none;width:80px;height:5px"><i id="vu"></i></div>
+      </div>
+      <div class="scriptbox" id="cap">Listening…</div>
     </div>
-    <div class="scriptbox" id="cap" style="font-style:normal;color:var(--txt);height:4.5em;line-height:1.5;overflow:hidden">Listening…</div>
+
+    <!-- TRIGGER BUTTON (100% FULL WIDTH) -->
+    <div class="row" style="margin:2px 0">
+      <button class="go" style="margin:0;width:100%" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
+    </div>
+
+    <!-- LATEST TITLE OUTPUT -->
+    <div>
+      <div class="lbl" style="margin-bottom:4px">📌 Generated Clip Title</div>
+      <div class="title-box"><span id="ttl">No clip generated yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
+      <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
+      <div class="metarow">
+        <span>🎮 Twitch Category</span>
+        <span id="cat" class="cat">auto</span>
+      </div>
+    </div>
+
   </div>
 
-  <div class="card">
-    <div class="lbl">📌 Latest clip title</div>
-    <div class="title"><span id="ttl">No clip yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
-    <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
-    <div class="row" style="margin-top:14px;gap:10px;align-items:stretch">
-      <select id="dur" style="width:auto;padding:0 32px 0 14px;font-weight:700"><option value="15">15s</option><option value="30" selected>30s</option><option value="45">45s</option></select>
-      <button class="go" style="margin:0" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
-    </div>
-  </div>
-
+  <!-- RECENT CLIPS ACCORDION -->
   <details class="set">
-    <summary>🕒 Recent clips</summary>
+    <summary>🕒 Recent Clips</summary>
     <div class="setbody">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
-      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:13px">No clips yet.</div>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
+      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px">No clips yet.</div>
     </div>
   </details>
 
+  <!-- SETTINGS ACCORDION -->
   <details class="set">
     <summary>⚙️ Settings</summary>
     <form class="setbody" onsubmit="save(event)">
-      <div class="lbl">🎙️ Streamer</div>
-      <label>Microphone device</label>
+      <div class="lbl">🎙️ Streamer & Audio</div>
+      <label>Microphone Input Device</label>
       <div style="position:relative">
-        <select id="mic_device" style="padding-left:26px">__MIC_OPTS__</select>
-        <div title="Mic level" style="position:absolute;left:11px;top:0;bottom:0;margin:auto 0;width:8px;height:22px;background:#1b2230;border-radius:4px;overflow:hidden;display:flex;align-items:flex-end">
+        <select id="mic_device" style="padding-left:24px">__MIC_OPTS__</select>
+        <div title="Mic Level" style="position:absolute;left:9px;top:0;bottom:0;margin:auto 0;width:6px;height:18px;background:#1b2230;border-radius:3px;overflow:hidden;display:flex;align-items:flex-end">
           <i id="vu2" style="display:block;width:100%;height:0;background:linear-gradient(0deg,#10b981,#f59e0b,#ef4444);transition:height .08s linear"></i>
         </div>
       </div>
-      <div class="flex"><div><label>Streamer name</label><input id="streamer_name" value="__STREAMER__"></div>
-        <div><label>Twitch channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
-      <label>Custom words / jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
-      <label>Default game fallback</label><input id="default_game" value="__GAME__">
+      <div class="flex"><div><label>Streamer Name</label><input id="streamer_name" value="__STREAMER__"></div>
+        <div><label>Twitch Channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
+      <div class="flex">
+        <div><label>Default Clip Length</label><select id="default_duration">__DUR_OPTS__</select></div>
+        <div><label>Default Game Fallback</label><input id="default_game" value="__GAME__"></div>
+      </div>
+      <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
 
-      <div class="lbl" style="margin-top:24px">🧠 AI models</div>
+      <div class="lbl" style="margin-top:18px">🧠 AI Models</div>
       <label>Transcription (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
-      <label>Title generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
+      <label>Title Generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
 
-      <div class="lbl" style="margin-top:24px">🚀 YouTube Shorts</div>
-      <div class="chk"><label style="margin:0">Enable auto-upload</label><input type="checkbox" id="enable_yt" __YT__></div>
+      <div class="lbl" style="margin-top:18px">🚀 YouTube Shorts</div>
+      <div class="chk"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
       <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
       <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
       <div class="flex"><div><label>Privacy</label><select id="yt_privacy">
         <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
-        <div><label>Upload limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
-      <label>OBS clips folder</label><input id="obs_clips_dir" value="__OBS__">
-      <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:12px;padding:12px;font-size:14px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:10px">⬆&nbsp; Upload latest clip now</button>
-      <div style="font-size:12px;color:var(--dim);margin-top:8px">Or call <code>GET /upload</code> from Aitum after the vertical clip exports.</div>
+        <div><label>Upload Limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
+      <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
+      <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:10px;padding:10px;font-size:13px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:8px">⬆&nbsp; Upload Latest Clip Now</button>
 
-      <div class="lbl" style="margin-top:24px">🔔 Preferences</div>
-      <div class="chk"><label style="margin:0">Desktop notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
-      <div class="chk"><label style="margin:0">Auto-copy title to clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
+      <div class="lbl" style="margin-top:18px">🔔 Preferences</div>
+      <div class="chk"><label style="margin:0">Desktop Notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
+      <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
 
-      <button class="save" type="submit">💾 Save settings</button>
+      <button class="save" type="submit">💾 Save Settings</button>
     </form>
   </details>
 </div>
@@ -718,14 +748,13 @@ async function clearHistory(btn){
   await fetch('/api/history/clear',{method:'POST'});loadHistory();
 }
 async function loadHistory(){try{const h=await(await fetch('/api/history')).json();
-  $('history').innerHTML=h.length?h.map(c=>`<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:8px 0"><span style="color:var(--blue);font-weight:600">${esc(c.title)}</span><span style="color:var(--dim);white-space:nowrap">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join(''):'No clips yet.';
+  $('history').innerHTML=h.length?h.map(c=>`<div style="display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--card-border);padding:6px 0"><span style="color:var(--blue);font-weight:600">${esc(c.title)}</span><span style="color:var(--dim);white-space:nowrap">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join(''):'No clips yet.';
 }catch(e){}}
 loadHistory();
 let paused=false;
 function togglePause(){fetch(paused?'/resume':'/pause');}
 function quitApp(btn){
-  // In-page confirm: OBS's embedded browser (CEF) crashes on window.confirm().
-  if(btn.dataset.armed){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:80px;color:#8b96a8\">Clip in Context stopped. You can close this tab.</p>';return;}
+  if(btn.dataset.armed){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:60px;color:#94a3b8\">Clip in Context stopped. You can close this tab.</p>';return;}
   btn.dataset.armed='1';btn.textContent='Confirm?';
   setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Quit';}},2500);
 }
@@ -736,26 +765,36 @@ setInterval(async()=>{try{
   {const vu=$('vu');if(vu)vu.style.width=p+'%';const v2=$('vu2');if(v2)v2.style.height=p+'%';}
   $('cat').textContent=s.category||'auto';
   if(s.live)$('cap').textContent=s.live;
-  $('whDot').style.color=s.whisper_err?'#f87171':(s.whisper?'var(--ok)':'#fbbf24');
-  $('whTxt').textContent=s.whisper_err?'error':(s.whisper?'ready':'loading…');
-  $('olDot').style.color=s.ollama?'var(--ok)':'#f87171';$('olTxt').textContent=s.ollama?'up':'down';
-  if(s.notice){const n=$('notice'),ok=s.notice_level==='ok';
-    n.style.borderColor=ok?'#14503b':'#7c2d12';n.style.background=ok?'#0e2a20':'#2a1206';n.style.color=ok?'#6ee7b7':'#fca5a5';
-    $('noticeMsg').textContent=(ok?'✅ ':'⚠ ')+s.notice;n.style.display='flex';}
-  const l=$('live');if(s.paused){l.textContent='⏸ Paused';l.classList.add('off');}else{l.textContent='● Running';l.classList.remove('off');}
+  const wErr=s.whisper_err?'error':(s.whisper?'ready':'loading…'),wCol=s.whisper_err?'#f87171':(s.whisper?'var(--ok)':'#fbbf24');
+  $('whDot').style.color=wCol;$('whTxt').textContent=wErr;
+  const oCol=s.ollama?'var(--ok)':'#f87171',oTxt=s.ollama?'ready':'down';
+  $('olDot').style.color=oCol;$('olTxt').textContent=oTxt;
+  {const n=$('notice');
+   if(s.notice){const ok=s.notice_level==='ok';
+     n.style.borderColor=ok?'#14503b':'#7c2d12';n.style.background=ok?'#0e2a20':'#2a1206';n.style.color=ok?'#6ee7b7':'#fca5a5';
+     $('noticeMsg').textContent=(ok?'✅ ':'⚠ ')+s.notice;
+     if(n.dataset.msg!==s.notice){n.dataset.msg=s.notice;n.style.display='flex';}   // re-show only on a new message
+   }else{n.style.display='none';delete n.dataset.msg;}}                             // server cleared it → hide
+  const l=$('live');
+  if(s.paused){l.textContent='⏸ Paused ▾';l.classList.add('off');}
+  else if(s.whisper_err||!s.whisper||!s.ollama){l.textContent='● Degraded ▾';l.classList.remove('off');}
+  else{l.textContent='● Ready ▾';l.classList.remove('off');}
   paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
 }catch(e){}},150);
 async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.disabled=true;
-  try{const d=await(await fetch('/clip?json=1&duration='+$('dur').value)).json();
+  try{const d=await(await fetch('/clip?json=1')).json();
     if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
   b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
-function copyTitle(){navigator.clipboard.writeText($('ttl').textContent);toast('Copied');}
+function copyTitle(){const t=$('ttl').textContent.trim();
+  if(!t||t==='No clip generated yet'){toast('No title yet');return;}
+  navigator.clipboard.writeText(t);toast('Copied');}
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
 async function save(ev){ev.preventDefault();
   const b={streamer_name:$('streamer_name').value,twitch_channel:$('twitch_channel').value,
     mic_device:$('mic_device').value,default_game:$('default_game').value,
+    default_duration:parseInt($('default_duration').value)||30,
     whisper_model:$('whisper_model').value,ollama_model:$('ollama_model').value,
     custom_words:$('custom_words').value.split(',').map(s=>s.trim()).filter(Boolean),
     enable_yt:$('enable_yt').checked,google_client_id:$('google_client_id').value,
@@ -783,6 +822,11 @@ def apply_settings(data):
     if "max_upload_kbps" in data:
         try:
             cfg["max_upload_kbps"] = int(data["max_upload_kbps"])
+        except (TypeError, ValueError):
+            pass
+    if "default_duration" in data:
+        try:
+            cfg["default_duration"] = int(data["default_duration"])
         except (TypeError, ValueError):
             pass
     cid, sec = str(data.get("google_client_id", "")).strip(), str(data.get("google_client_secret", "")).strip()
@@ -856,10 +900,12 @@ def dashboard_html():
         whis.insert(0, cfg["whisper_model"])
     label = lambda m: e(m.split("/")[-1].replace("whisper-", "").replace("-mlx", ""))
     whisper_opts = "".join(f'<option value="{e(m)}"{" selected" if m == cfg["whisper_model"] else ""}>{label(m)}</option>' for m in whis)
+    dur_opts = "".join(f'<option value="{d}"{" selected" if cfg.get("default_duration", 30) == d else ""}>{d} seconds</option>' for d in (15, 30, 45, 60))
     repl = {
         "__STREAMER__": e(cfg["streamer_name"]), "__TWITCH__": e(cfg["twitch_channel"]),
         "__WORDS__": e(", ".join(cfg["custom_words"])), "__GAME__": e(cfg["default_game"]),
         "__MIC_OPTS__": opts, "__MODEL_OPTS__": model_opts, "__WHISPER_OPTS__": whisper_opts,
+        "__DUR_OPTS__": dur_opts,
         "__OBS__": e(cfg["obs_clips_dir"]), "__KBPS__": e(cfg["max_upload_kbps"]),
         "__CID__": e(cfg["google_client_id"]),
         "__SEC_PH__": "•••••• saved" if cfg["google_client_secret"] else "GOCSPX-…",
@@ -889,12 +935,19 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         if u.path in ("/", "/dashboard"):
             self._send(dashboard_html(), "text/html; charset=utf-8")
+        elif u.path in ("/icon.png", "/favicon.ico"):
+            icon_path = os.path.join(HERE, "icon.png")
+            if os.path.exists(icon_path):
+                with open(icon_path, "rb") as f:
+                    self._send(f.read(), "image/png")
+            else:
+                self._send(b"not found", "text/plain", 404)
         elif u.path == "/api/status":
             self._send(json.dumps(status_json()))
         elif u.path == "/api/history":
             self._send(json.dumps(clip_history[-20:][::-1]))   # newest first
         elif u.path == "/clip":
-            dur = max(5, min(BUFFER_SECONDS, int(q.get("duration", [DEFAULT_CLIP_SECONDS])[0])))
+            dur = max(5, min(BUFFER_SECONDS, int(q.get("duration", [cfg.get("default_duration", DEFAULT_CLIP_SECONDS)])[0])))
             title, raw = make_clip(dur, q.get("game", [""])[0])
             self._send(json.dumps({"title": title, "raw_transcript": raw}))
         elif u.path == "/upload":

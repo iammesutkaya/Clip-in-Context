@@ -57,7 +57,27 @@ TCC silence** (the trap an earlier `.app` version fell into). Menu bar via
 ## Trigger
 - Menu bar / dashboard **Trigger Clip Now**, or
 - HTTP (Stream Deck / Aitum): `GET http://localhost:5001/clip?duration=30&game=Valorant`
-- `GET /pause`, `GET /resume`.
+
+### HTTP endpoints
+All are plain `GET`s on `http://localhost:5001`, so anything that can open a URL
+(Aitum webhook, Stream Deck, Shortcuts, `curl`) can drive the app.
+
+| Endpoint | Does |
+|---|---|
+| `/clip?duration=30&game=X` | Transcribe the last N seconds → AI title → clipboard, notification, Aitum. Both params optional (`duration` defaults to your **Default Clip Length**). |
+| `/name` | Rename the newest video in the OBS clips folder to the last generated title (sanitized). OBS can't put the title in the filename — this does. |
+| `/upload` | Upload the newest clip to YouTube as a Short, using the last title. |
+| `/pause`, `/resume` | Stop / start feeding the audio buffer. |
+| `/quit` | Stop the app. |
+
+### Wiring it to Aitum (recommended order)
+Add these as webhook actions in your clip sequence — the order matters, because
+`/name` and `/upload` act on the **exported file**:
+
+1. `/clip` — generates the title and pushes it to your Aitum `clip_title` variable.
+2. *your* "Create vertical clip" action — exports the `.mp4`.
+3. `/name` — renames that file to the AI title.
+4. `/upload` — *(optional)* publishes it to YouTube.
 
 ### Global hotkey (native macOS, no extra permission)
 Bind any key with **Shortcuts.app** — no daemon, no Accessibility prompt:
