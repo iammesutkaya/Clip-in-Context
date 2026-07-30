@@ -25,7 +25,8 @@ mic → rolling 30s buffer → (trigger) → MLX Whisper → AI title
 
 ## Install
 ```bash
-git clone <this-repo> clip-in-context && cd clip-in-context
+git clone https://github.com/iammesutkaya/Clip-in-Context.git
+cd Clip-in-Context
 ./setup.sh
 ```
 `setup.sh` creates a venv, installs dependencies, registers an on-demand
