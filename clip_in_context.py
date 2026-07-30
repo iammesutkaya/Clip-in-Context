@@ -602,8 +602,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     cursor:pointer;transition:background .15s,color .15s;white-space:nowrap}
   .tab:hover{color:var(--txt)}
   .tab.on{background:#222a38;color:var(--txt)}
+  /* Never set display inline on a panel — an inline style beats .tabpanel{display:none}
+     and the panel would show even when inactive. Use .stack for column layout. */
   .tabpanel{display:none}
   .tabpanel.on{display:block}
+  .tabpanel.stack.on{display:flex;flex-direction:column;gap:10px}
   /* Min-height keeps the frame (and the Save button) roughly put when switching
      tabs. Panels are 56-352px naturally; 200 balances stability against dead
      space on the short ones. */
@@ -639,14 +642,6 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .status-hover-wrap:hover .status-popover{display:flex}
   .pop-row{display:flex;justify-content:space-between;align-items:center}
   .pop-row span:last-child{font-weight:600;color:var(--txt)}
-
-  details.set{background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius)}
-  details.set > summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:10px;letter-spacing:.06em;
-    text-transform:uppercase;font-weight:700;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
-  details.set > summary::-webkit-details-marker{display:none}
-  details.set > summary::after{content:'';width:12px;height:12px;background:var(--chev) center/12px no-repeat;transition:transform .2s}
-  details.set[open] > summary::after{transform:rotate(180deg)}
-  details.set > .setbody{padding:0 12px 14px}
 </style></head><body><div class="wrap">
 
   <!-- UNIFIED HEADER & HOVER STATUS BAR -->
@@ -674,7 +669,14 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
   <!-- CORE ACTION PANEL -->
   <div class="card" style="display:flex;flex-direction:column;gap:10px">
-    
+
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab on" data-tab="0">💬 Live</button>
+      <button type="button" class="tab" data-tab="1">🕒 Recent Clips</button>
+    </div>
+
+    <div class="tabpanel stack on" data-panel="0">
+
     <!-- LIVE CAPTIONS & VU METER -->
     <div>
       <div class="row" style="margin-bottom:4px">
@@ -700,21 +702,19 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       </div>
     </div>
 
+    </div><!-- /live panel -->
+
+    <div class="tabpanel" data-panel="1">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
+      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:255px">No clips yet.</div>
+    </div>
+
   </div>
 
-  <!-- RECENT CLIPS ACCORDION -->
-  <details class="set">
-    <summary>🕒 Recent Clips</summary>
-    <div class="setbody">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
-      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px">No clips yet.</div>
-    </div>
-  </details>
-
-  <!-- SETTINGS ACCORDION -->
-  <details class="set">
-    <summary>⚙️ Settings</summary>
-    <form class="setbody" onsubmit="save(event)">
+  <!-- SETTINGS -->
+  <div class="card">
+    <div class="lbl" style="margin-bottom:8px">⚙️ Settings</div>
+    <form onsubmit="save(event)">
       <div class="tabs" role="tablist">
         <button type="button" class="tab on" data-tab="0">🎙️ Audio</button>
         <button type="button" class="tab" data-tab="1">🧠 AI</button>
@@ -763,21 +763,24 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       </div>
       <button class="save" type="submit">💾 Save Settings</button>
     </form>
-  </details>
+  </div>
 </div>
 <div id="toast" class="toast">Saved</div>
 <script>
 const $=id=>document.getElementById(id);
 // Exclusive accordions: opening one closes its siblings, so the dock never
 // grows past one open section. Closing Settings also resets its sub-sections.
-function exclusive(sel){const g=[...document.querySelectorAll(sel)];
-  g.forEach(d=>d.addEventListener('toggle',()=>{if(d.open)g.forEach(o=>{if(o!==d)o.open=false;});}));}
-exclusive('details.set');
-// Settings tabs
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
-  const i=t.dataset.tab;
-  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
-  document.querySelectorAll('.tabpanel').forEach(p=>p.classList.toggle('on',p.dataset.panel===i));}));
+// Tabs. Each .tabs bar only drives panels that are its own siblings (or inside a
+// sibling .tabwrap), so the main card's tabs and the Settings tabs stay independent.
+document.querySelectorAll('.tabs').forEach(bar=>{
+  const scope=bar.parentElement;
+  const panels=()=>[...scope.children].flatMap(c=>
+    c.classList.contains('tabpanel')?[c]:(c.classList.contains('tabwrap')?[...c.children]:[]));
+  bar.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+    const i=t.dataset.tab;
+    bar.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+    panels().forEach(p=>p.classList.toggle('on',p.dataset.panel===i));
+    if(i==='1'&&scope.querySelector('#history'))loadHistory();}));});
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 async function clearHistory(btn){
   if(!btn.dataset.armed){btn.dataset.armed='1';btn.textContent='Confirm?';setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Clear all';}},2500);return;}
