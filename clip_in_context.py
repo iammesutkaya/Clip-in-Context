@@ -706,14 +706,14 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
     <div class="tabpanel" data-panel="1">
       <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
-      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:255px">No clips yet.</div>
+      <!-- min-height matches the Live panel so the card doesn't resize between tabs -->
+      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:264px">No clips yet.</div>
     </div>
 
   </div>
 
   <!-- SETTINGS -->
   <div class="card">
-    <div class="lbl" style="margin-bottom:8px">⚙️ Settings</div>
     <form onsubmit="save(event)">
       <div class="tabs" role="tablist">
         <button type="button" class="tab on" data-tab="0">🎙️ Audio</button>
