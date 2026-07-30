@@ -777,13 +777,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
       </div>
       <div class="tabpanel" data-panel="2">
-      <div class="chk"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
       <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
       <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
       <div class="flex"><div><label>Privacy</label><select id="yt_privacy">
         <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
         <div><label>Upload Limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
       <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
+      <div class="chk" style="margin-top:16px"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
       <button type="button" id="upBtn" class="btn2" onclick="uploadLatest(this)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         <span>Upload Latest Clip</span>
