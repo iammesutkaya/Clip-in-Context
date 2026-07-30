@@ -655,6 +655,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
           <div class="pop-row"><span>Ollama LLM</span><span><b id="olDot" style="color:var(--warn)">●</b> <span id="olTxt" style="color:var(--txt)">down</span></span></div>
         </div>
       </div>
+      <div class="vu" title="Mic level" style="flex:none;width:56px;height:6px"><i id="vu"></i></div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
       <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
@@ -677,14 +678,8 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
 
     <div class="tabpanel stack on" data-panel="0">
 
-    <!-- LIVE CAPTIONS & VU METER -->
-    <div>
-      <div class="row" style="margin-bottom:4px">
-        <div class="lbl" style="margin:0">💬 Live Speech</div>
-        <div class="vu" title="Mic Level" style="flex:none;width:80px;height:5px"><i id="vu"></i></div>
-      </div>
-      <div class="scriptbox" id="cap">Listening…</div>
-    </div>
+    <!-- LIVE CAPTIONS (the tab label already says "Live"; mic meter is in the header) -->
+    <div class="scriptbox" id="cap" style="margin-top:0">Listening…</div>
 
     <!-- TRIGGER BUTTON (100% FULL WIDTH) -->
     <div class="row" style="margin:2px 0">
@@ -707,7 +702,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <div class="tabpanel" data-panel="1">
       <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
       <!-- min-height matches the Live panel so the card doesn't resize between tabs -->
-      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:264px">No clips yet.</div>
+      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:244px">No clips yet.</div>
     </div>
 
   </div>
@@ -716,10 +711,9 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <div class="card">
     <form onsubmit="save(event)">
       <div class="tabs" role="tablist">
-        <button type="button" class="tab on" data-tab="0">🎙️ Audio</button>
+        <button type="button" class="tab on" data-tab="0">🎙️ Stream</button>
         <button type="button" class="tab" data-tab="1">🧠 AI</button>
         <button type="button" class="tab" data-tab="2">🚀 YouTube</button>
-        <button type="button" class="tab" data-tab="3">🔔 Prefs</button>
       </div>
       <div class="tabwrap">
       <div class="tabpanel on" data-panel="0">
@@ -736,12 +730,14 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <div><label>Default Clip Length</label><select id="default_duration">__DUR_OPTS__</select></div>
         <div><label>Default Game Fallback</label><input id="default_game" value="__GAME__"></div>
       </div>
-      <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
 
+      <div class="chk" style="margin-top:14px"><label style="margin:0">Desktop Notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
+      <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
       </div>
       <div class="tabpanel" data-panel="1">
       <label>Transcription (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
       <label>Title Generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
+      <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
 
       </div>
       <div class="tabpanel" data-panel="2">
@@ -753,11 +749,6 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <div><label>Upload Limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
       <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
       <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:10px;padding:10px;font-size:13px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:8px">⬆&nbsp; Upload Latest Clip Now</button>
-
-      </div>
-      <div class="tabpanel" data-panel="3">
-      <div class="chk"><label style="margin:0">Desktop Notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
-      <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
 
       </div>
       </div>
