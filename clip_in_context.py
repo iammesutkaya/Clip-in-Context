@@ -645,6 +645,14 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .status-hover-wrap:hover .status-popover{display:flex}
   .pop-row{display:flex;justify-content:space-between;align-items:center}
   .pop-row span:last-child{font-weight:600;color:var(--txt)}
+  /* Live Twitch category, click to re-check */
+  .chip-tw{display:inline-flex;align-items:center;gap:5px;max-width:170px;
+    font:inherit;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;
+    background:rgba(145,70,255,.16);color:#bf94ff;border:none;cursor:pointer;
+    transition:background .15s}
+  .chip-tw:hover{background:rgba(145,70,255,.28)}
+  .chip-tw:disabled{opacity:.5;cursor:default}
+  .chip-tw span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style></head><body><div class="wrap">
 
   <!-- UNIFIED HEADER & HOVER STATUS BAR -->
@@ -658,7 +666,11 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
           <div class="pop-row"><span>Ollama LLM</span><span><b id="olDot" style="color:var(--warn)">●</b> <span id="olTxt" style="color:var(--txt)">down</span></span></div>
         </div>
       </div>
-      <div class="vu" title="Mic level" style="flex:none;width:56px;height:6px"><i id="vu"></i></div>
+      <button type="button" id="catBtn" class="chip-tw" onclick="refreshCategory()"
+              title="Live Twitch category — click to re-check">
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="flex:none" aria-label="Twitch"><path d="M4.265 3 3 6.236v13.06h4.463V22h2.529l2.532-2.704h3.66L21 14.677V3H4.265zm1.686 1.685h13.365v9.135l-2.953 2.95h-4.464l-2.529 2.7v-2.7H5.951V4.685zm4.633 8.014h1.686V7.632h-1.686v5.067zm4.62 0h1.686V7.632h-1.686v5.067z"/></svg>
+        <span id="cat">auto</span>
+      </button>
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
       <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
@@ -694,14 +706,6 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <div class="lbl" style="margin-bottom:4px">📌 Generated Clip Title</div>
       <div class="title-box"><span id="ttl">No clip generated yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
       <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
-      <div class="metarow">
-        <span style="display:flex;align-items:center;gap:7px;min-width:0">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="#9146FF" style="flex:none" aria-label="Twitch"><path d="M4.265 3 3 6.236v13.06h4.463V22h2.529l2.532-2.704h3.66L21 14.677V3H4.265zm1.686 1.685h13.365v9.135l-2.953 2.95h-4.464l-2.529 2.7v-2.7H5.951V4.685zm4.633 8.014h1.686V7.632h-1.686v5.067zm4.62 0h1.686V7.632h-1.686v5.067z"/></svg>
-          <span id="cat" class="cat" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">auto</span>
-        </span>
-        <button type="button" id="catBtn" class="mini" title="Re-check Twitch category"
-          style="padding:3px 8px;line-height:1;flex:none" onclick="refreshCategory()">↻</button>
-      </div>
     </div>
 
     </div><!-- /live panel -->
@@ -709,7 +713,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
     <div class="tabpanel" data-panel="1">
       <div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
       <!-- min-height matches the Live panel so the card doesn't resize between tabs -->
-      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:244px">No clips yet.</div>
+      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:209px">No clips yet.</div>
     </div>
 
   </div>
@@ -825,9 +829,9 @@ async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.
   try{const d=await(await fetch('/clip?json=1')).json();
     if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
   b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
-async function refreshCategory(){const b=$('catBtn');b.disabled=true;b.style.opacity=.5;
+async function refreshCategory(){const b=$('catBtn');b.disabled=true;   // .chip-tw:disabled dims it
   try{const d=await(await fetch('/category')).json();if(d.category)$('cat').textContent=d.category;}catch(e){}
-  b.disabled=false;b.style.opacity=1;}
+  b.disabled=false;}
 function copyTitle(){const t=$('ttl').textContent.trim();
   if(!t||t==='No clip generated yet'){toast('No title yet');return;}
   navigator.clipboard.writeText(t);toast('Copied');}
