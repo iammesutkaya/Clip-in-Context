@@ -593,6 +593,18 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   #cap{font-style:normal;color:var(--txt);height:67px}   /* 3 lines */
   .metarow{display:flex;justify-content:space-between;align-items:center;margin-top:6px;
     padding:6px 12px;font-size:12px;color:var(--dim)}
+  /* Settings sub-sections: only one short group open at a time, so the form
+     never overflows the dock. */
+  details.sub{border-top:1px solid var(--card-border)}
+  details.sub:first-of-type{border-top:none}
+  details.sub summary{list-style:none;cursor:pointer;padding:11px 2px;font-size:11px;
+    letter-spacing:.06em;text-transform:uppercase;font-weight:700;color:var(--dim);
+    display:flex;justify-content:space-between;align-items:center}
+  details.sub summary::-webkit-details-marker{display:none}
+  details.sub summary::after{content:'';width:12px;height:12px;
+    background:var(--chev) center/12px no-repeat;transition:transform .2s}
+  details.sub[open] summary::after{transform:rotate(180deg)}
+  details.sub .subbody{padding:0 2px 14px}
   
   button{font:inherit;cursor:pointer;border:none;border-radius:8px;color:#fff;font-weight:700;transition:all 0.15s ease}
   .go{width:100%;padding:0 16px;font-size:14px;line-height:40px;background:linear-gradient(135deg,var(--accent),var(--accent2));
@@ -626,12 +638,12 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   .pop-row span:last-child{font-weight:600;color:var(--txt)}
 
   details.set{background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius)}
-  details.set summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:10px;letter-spacing:.06em;
+  details.set > summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:10px;letter-spacing:.06em;
     text-transform:uppercase;font-weight:700;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
-  details.set summary::-webkit-details-marker{display:none}
-  details.set summary::after{content:'';width:12px;height:12px;background:var(--chev) center/12px no-repeat;transition:transform .2s}
-  details.set[open] summary::after{transform:rotate(180deg)}
-  details.set .setbody{padding:0 12px 14px}
+  details.set > summary::-webkit-details-marker{display:none}
+  details.set > summary::after{content:'';width:12px;height:12px;background:var(--chev) center/12px no-repeat;transition:transform .2s}
+  details.set[open] > summary::after{transform:rotate(180deg)}
+  details.set > .setbody{padding:0 12px 14px}
 </style></head><body><div class="wrap">
 
   <!-- UNIFIED HEADER & HOVER STATUS BAR -->
@@ -700,7 +712,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
   <details class="set">
     <summary>⚙️ Settings</summary>
     <form class="setbody" onsubmit="save(event)">
-      <div class="lbl">🎙️ Streamer & Audio</div>
+      <details class="sub" open><summary>🎙️ Streamer &amp; Audio</summary><div class="subbody">
       <label>Microphone Input Device</label>
       <div style="position:relative">
         <select id="mic_device" style="padding-left:24px">__MIC_OPTS__</select>
@@ -716,11 +728,13 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       </div>
       <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
 
-      <div class="lbl" style="margin-top:18px">🧠 AI Models</div>
+      </div></details>
+      <details class="sub"><summary>🧠 AI Models</summary><div class="subbody">
       <label>Transcription (Whisper MLX)</label><select id="whisper_model">__WHISPER_OPTS__</select>
       <label>Title Generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
 
-      <div class="lbl" style="margin-top:18px">🚀 YouTube Shorts</div>
+      </div></details>
+      <details class="sub"><summary>🚀 YouTube Shorts</summary><div class="subbody">
       <div class="chk"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
       <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
       <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
@@ -730,10 +744,12 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
       <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
       <button type="button" onclick="fetch('/upload')" style="width:100%;margin-top:10px;padding:10px;font-size:13px;font-weight:600;color:var(--blue);background:#14202e;border:1px solid #24425e;border-radius:8px">⬆&nbsp; Upload Latest Clip Now</button>
 
-      <div class="lbl" style="margin-top:18px">🔔 Preferences</div>
+      </div></details>
+      <details class="sub"><summary>🔔 Preferences</summary><div class="subbody">
       <div class="chk"><label style="margin:0">Desktop Notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
       <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
 
+      </div></details>
       <button class="save" type="submit">💾 Save Settings</button>
     </form>
   </details>
