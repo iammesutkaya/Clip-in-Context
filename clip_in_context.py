@@ -12,7 +12,7 @@ no .app bundle, no code signing, and no TCC silence. Menu bar via rumps.
 Trigger: menu bar item, or HTTP  GET http://localhost:5001/clip?duration=30&game=Valorant
 Run:     python3 clip_in_context.py
 """
-import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html
+import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html, queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Line-buffer stdout/stderr so /tmp/clipincontext.log is live (launchd block-buffers
@@ -45,7 +45,7 @@ cfg = {
     "ollama_model": "llama3.2",          # model for jargon + title generation
     "enable_yt": False,
     "yt_privacy": "unlisted",
-    "max_upload_kbps": 1500,
+    "max_upload_kbps": 800,   # KB/s cap on YT upload; low so it yields uplink to the live stream
     "obs_clips_dir": "~/Movies",
     "enable_notif": True,
     "enable_clip": True,
@@ -532,39 +532,62 @@ def write_client_secret():
         "token_uri": "https://oauth2.googleapis.com/token",
         "redirect_uris": ["http://localhost"]}}, open(CLIENT_SECRET_FILE, "w"), indent=2)
 
+def _do_youtube_upload(path, title, raw, game):
+    """Blocking upload of one clip. Throttled to max_upload_kbps so it yields
+    uplink to the live Twitch/YouTube outputs (a stream already pushes ~12 Mbps;
+    an unthrottled upload starves it → the live 'bitrate' drops)."""
+    if not path or not os.path.exists(path):
+        return
+    svc = youtube_service()
+    if not svc:
+        set_notice("YouTube not authenticated — click Authenticate in the YouTube tab")
+        return
+    from googleapiclient.http import MediaFileUpload
+    yt_title = title if "#shorts" in title.lower() else f"{title} #Shorts"
+    tag = f"#{game.replace(' ', '')}" if game else "#Gaming"
+    body = {"snippet": {"title": yt_title[:100],
+                        "description": f'{cfg["streamer_name"]} stream highlight.\n\n🎙️ "{raw}"\n\n#Shorts {tag} #TwitchClips',
+                        "tags": ["Shorts", "TwitchClips", game or "Gaming"], "categoryId": "20"},
+            "status": {"privacyStatus": cfg["yt_privacy"], "selfDeclaredMadeForKids": False}}
+    chunk = 1024 * 1024
+    req = svc.videos().insert(part="snippet,status", body=body,
+                              media_body=MediaFileUpload(path, chunksize=chunk, resumable=True))
+    resp = None
+    print(f"🚀 uploading {os.path.basename(path)}…")
+    set_notice(f"Uploading {os.path.basename(path)} to YouTube…", "work")
+    while resp is None:
+        t0 = time.time()
+        status, resp = req.next_chunk()
+        wait = chunk / (cfg["max_upload_kbps"] * 1024) - (time.time() - t0)
+        if wait > 0:
+            time.sleep(wait)
+    url = f"https://youtu.be/{resp['id']}"
+    print(f"✅ {url}")
+    set_notice(f"Uploaded to YouTube: {url}", "ok")
+
+# One serialized worker: uploads go out live during the stream, but ONE at a time.
+# Concurrent uploads (a thread per clip) multiplied uplink pressure and starved
+# the live outputs — clips after the first stalled/failed. The queue fixes that.
+_upload_q = queue.Queue()
+
+def _upload_worker():
+    while True:
+        path, title, raw, game = _upload_q.get()
+        try:
+            _do_youtube_upload(path, title, raw, game)
+        except Exception as e:
+            print(f"❌ upload failed: {e}")
+            set_notice(f"YouTube upload failed: {e}")
+        finally:
+            _upload_q.task_done()
+
+threading.Thread(target=_upload_worker, daemon=True).start()
+
 def upload_youtube_async(path, title, raw, game):
-    def work():
-      try:
-        if not path or not os.path.exists(path):
-            return
-        svc = youtube_service()
-        if not svc:
-            set_notice("YouTube not authenticated — click Authenticate in the YouTube tab")
-            return
-        from googleapiclient.http import MediaFileUpload
-        yt_title = title if "#shorts" in title.lower() else f"{title} #Shorts"
-        tag = f"#{game.replace(' ', '')}" if game else "#Gaming"
-        body = {"snippet": {"title": yt_title[:100],
-                            "description": f'{cfg["streamer_name"]} stream highlight.\n\n🎙️ "{raw}"\n\n#Shorts {tag} #TwitchClips',
-                            "tags": ["Shorts", "TwitchClips", game or "Gaming"], "categoryId": "20"},
-                "status": {"privacyStatus": cfg["yt_privacy"], "selfDeclaredMadeForKids": False}}
-        chunk = 1024 * 1024
-        req = svc.videos().insert(part="snippet,status", body=body,
-                                  media_body=MediaFileUpload(path, chunksize=chunk, resumable=True))
-        resp = None
-        print(f"🚀 uploading {os.path.basename(path)}…")
-        while resp is None:
-            t0 = time.time()
-            status, resp = req.next_chunk()
-            wait = chunk / (cfg["max_upload_kbps"] * 1024) - (time.time() - t0)
-            if wait > 0:
-                time.sleep(wait)
-        url = f"https://youtu.be/{resp['id']}"
-        print(f"✅ {url}")
-        set_notice(f"Uploaded to YouTube: {url}", "ok")
-      except Exception as e:
-        set_notice(f"YouTube upload failed: {e}")
-    threading.Thread(target=work, daemon=True).start()
+    _upload_q.put((path, title, raw, game))
+    waiting = _upload_q.qsize()
+    if waiting > 1:   # something is already uploading; this one is behind it
+        set_notice(f"Queued for YouTube upload — {waiting} waiting…", "work")
 
 def safe_filename(name):
     name = re.sub(r'[/:\\?%*|"<>\x00-\x1f]', "-", name).strip(" .-")
@@ -646,7 +669,6 @@ def do_upload():
         set_notice("Newest clip was already uploaded — skipping duplicate", "ok")
         return
     last_uploaded_path = path
-    set_notice(f"Uploading {os.path.basename(path)} to YouTube…", "work")
     upload_youtube_async(path, last_title or "Stream Highlight", last_raw, detected_game)
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
@@ -980,7 +1002,7 @@ async function save(ev){ev.preventDefault();
     custom_words:$('custom_words').value.split(',').map(s=>s.trim()).filter(Boolean),
     enable_yt:$('enable_yt').checked,google_client_id:$('google_client_id').value,
     google_client_secret:$('google_client_secret').value,yt_privacy:$('yt_privacy').value,
-    max_upload_kbps:parseInt($('max_upload_kbps').value)||1500,obs_clips_dir:$('obs_clips_dir').value,
+    max_upload_kbps:parseInt($('max_upload_kbps').value)||800,obs_clips_dir:$('obs_clips_dir').value,
     enable_notif:$('enable_notif').checked,enable_clip:$('enable_clip').checked};
   const r=await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
   toast(r.ok?'Saved':'Error');if(r.ok)$('google_client_secret').value='';}
