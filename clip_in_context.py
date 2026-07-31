@@ -390,12 +390,14 @@ def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
             last_title, last_raw = "Stream Highlight", "No mic speech detected"
             return last_title, last_raw
         jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
+        set_notice(f"Transcribing the last {duration}s…", "work")
         with transcribe_lock:
             text = transcribe_clip(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
         if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
             set_notice("Audio had no recognisable speech — nothing to title")
             last_title, last_raw = "Awesome Stream Moment", "No clear speech"
             return last_title, last_raw
+        set_notice("Writing a title…", "work")
         title = ai_title(text, game)
         if not title:
             if not ollama_ok:
@@ -584,7 +586,7 @@ def wait_for_fresh_clip(timeout=20.0):
     few seconds after /clip, so /name and /upload must WAIT for it — otherwise
     they grab a stale/previous file (or re-touch an already-uploaded one). Falls
     back to newest-overall on timeout, and to any file when no trigger has run."""
-    start = time.time()
+    start, told = time.time(), False
     while time.time() - start < timeout:
         p = find_latest_clip()
         if not last_trigger_ts:
@@ -594,6 +596,9 @@ def wait_for_fresh_clip(timeout=20.0):
                 return p
         except OSError:
             pass
+        if not told:   # only announce if OBS hasn't finished the export yet
+            set_notice("Waiting for OBS to finish exporting the clip…", "work")
+            told = True
         time.sleep(0.3)
     return find_latest_clip()
 
@@ -641,7 +646,7 @@ def do_upload():
         set_notice("Newest clip was already uploaded — skipping duplicate", "ok")
         return
     last_uploaded_path = path
-    set_notice(f"Uploading {os.path.basename(path)}…", "ok")
+    set_notice(f"Uploading {os.path.basename(path)} to YouTube…", "work")
     upload_youtube_async(path, last_title or "Stream Highlight", last_raw, detected_game)
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
@@ -935,9 +940,13 @@ setInterval(async()=>{try{
   const oCol=s.ollama?'var(--ok)':'#f87171',oTxt=s.ollama?'ready':'down';
   $('olDot').style.color=oCol;$('olTxt').textContent=oTxt;
   {const n=$('notice');
-   if(s.notice){const ok=s.notice_level==='ok';
-     n.style.borderColor=ok?'#14503b':'#7c2d12';n.style.background=ok?'#0e2a20':'#2a1206';n.style.color=ok?'#6ee7b7':'#fca5a5';
-     $('noticeMsg').textContent=(ok?'✅ ':'⚠ ')+s.notice;
+   if(s.notice){
+     // [border, bg, text, icon] per level: work=neutral blue, ok=green, warn=red
+     const c=s.notice_level==='work'?['#1e3a5f','#0c1a2e','#93c5fd','⏳ ']
+            :s.notice_level==='ok'  ?['#14503b','#0e2a20','#6ee7b7','✅ ']
+            :                         ['#7c2d12','#2a1206','#fca5a5','⚠ '];
+     n.style.borderColor=c[0];n.style.background=c[1];n.style.color=c[2];
+     $('noticeMsg').textContent=c[3]+s.notice;
      if(n.dataset.msg!==s.notice){n.dataset.msg=s.notice;n.style.display='flex';}   // re-show only on a new message
    }else{n.style.display='none';delete n.dataset.msg;}}                             // server cleared it → hide
   const l=$('live');
