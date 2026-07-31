@@ -67,7 +67,7 @@ load_config()
 
 # ---------------- audio ----------------
 SAMPLE_RATE = 16000       # Whisper wants 16 kHz
-BUFFER_SECONDS = 60       # ring buffer length
+BUFFER_SECONDS = 120      # ring buffer length; caps how far back /clip?duration= can reach (~8 MB RAM)
 DEFAULT_CLIP_SECONDS = 30
 HTTP_PORT = 5001
 MAX_TITLE_LENGTH = 50
