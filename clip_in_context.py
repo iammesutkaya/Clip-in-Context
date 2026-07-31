@@ -447,31 +447,68 @@ def find_latest_clip(max_age=None):
                     best, best_m = p, m
     return best
 
-def youtube_service():
-    try:
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
-        creds = None
-        if os.path.exists(TOKEN_FILE):
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, YOUTUBE_SCOPES)
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                if not os.path.exists(CLIENT_SECRET_FILE):
-                    if cfg["google_client_id"] and cfg["google_client_secret"]:
-                        write_client_secret()
-                    else:
-                        print("⚠️ set YouTube credentials first"); return None
-                creds = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, YOUTUBE_SCOPES)\
-                    .run_local_server(port=8080, open_browser=True)
-            open(TOKEN_FILE, "w").write(creds.to_json())
-        return build("youtube", "v3", credentials=creds)
-    except Exception as e:
-        print(f"❌ youtube auth: {e}")
+OAUTH_REDIRECT = f"http://localhost:{HTTP_PORT}/oauth2callback"
+_oauth_flow = None   # pending google_auth_oauthlib Flow between /auth and /oauth2callback
+
+def youtube_creds():
+    """Return valid saved credentials (refreshing if needed). No interactive auth."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    if not os.path.exists(TOKEN_FILE):
         return None
+    try:
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, YOUTUBE_SCOPES)
+    except Exception:
+        return None
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            open(TOKEN_FILE, "w").write(creds.to_json())
+        except Exception as e:
+            print(f"⚠️ token refresh: {e}")
+            return None
+    return creds if creds and creds.valid else None
+
+def youtube_service():
+    from googleapiclient.discovery import build
+    creds = youtube_creds()
+    return build("youtube", "v3", credentials=creds) if creds else None
+
+def start_oauth():
+    """Begin YouTube OAuth. The callback is caught on our own always-on server
+    (port 5001), not run_local_server's flaky throwaway port."""
+    global _oauth_flow
+    if not os.path.exists(CLIENT_SECRET_FILE):
+        if cfg["google_client_id"] and cfg["google_client_secret"]:
+            write_client_secret()
+        else:
+            set_notice("Set your Google OAuth Client ID + Secret first")
+            return
+    try:
+        from google_auth_oauthlib.flow import Flow
+        _oauth_flow = Flow.from_client_secrets_file(CLIENT_SECRET_FILE, scopes=YOUTUBE_SCOPES,
+                                                    redirect_uri=OAUTH_REDIRECT)
+        url, _ = _oauth_flow.authorization_url(access_type="offline", prompt="consent",
+                                               include_granted_scopes="true")
+        set_notice("Opening browser to authorize YouTube…", "ok")
+        subprocess.run(["open", url])
+    except Exception as e:
+        set_notice(f"YouTube auth error: {e}")
+
+def finish_oauth(code):
+    """Exchange the auth code (from /oauth2callback) for a saved token."""
+    global _oauth_flow
+    if not _oauth_flow:
+        return "No authorization in progress — start it from the app first."
+    try:
+        _oauth_flow.fetch_token(code=code)
+        open(TOKEN_FILE, "w").write(_oauth_flow.credentials.to_json())
+        _oauth_flow = None
+        set_notice("YouTube authenticated", "ok")
+        return "Authenticated ✓ — you can close this tab and return to Clip in Context."
+    except Exception as e:
+        set_notice(f"YouTube auth failed: {e}")
+        return f"Authorization failed: {e}"
 
 def write_client_secret():
     json.dump({"installed": {
@@ -487,7 +524,7 @@ def upload_youtube_async(path, title, raw, game):
             return
         svc = youtube_service()
         if not svc:
-            set_notice("YouTube not authenticated — set credentials in Settings")
+            set_notice("YouTube not authenticated — click Authenticate in the YouTube tab")
             return
         from googleapiclient.http import MediaFileUpload
         yt_title = title if "#shorts" in title.lower() else f"{title} #Shorts"
@@ -783,6 +820,10 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
         <div><label>Upload Limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
       <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
+      <button type="button" class="btn2" style="margin-top:16px" onclick="fetch('/auth')">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg>
+        <span>Authenticate YouTube</span>
+      </button>
       <div class="chk" style="margin-top:16px"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
       <button type="button" id="upBtn" class="btn2" onclick="uploadLatest(this)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
@@ -1042,6 +1083,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(json.dumps({"title": title, "raw_transcript": raw}))
         elif u.path == "/category":
             self._send(json.dumps({"category": live_twitch_game()}))
+        elif u.path == "/auth":
+            threading.Thread(target=start_oauth, daemon=True).start()
+            self._send(b'{"status":"authorizing"}')
+        elif u.path == "/oauth2callback":
+            err = q.get("error", [""])[0]
+            msg = f"Authorization denied: {err}" if err else finish_oauth(q.get("code", [""])[0])
+            self._send("<!doctype html><meta charset=utf-8><body style=\"font:16px -apple-system,sans-serif;"
+                       "background:#0b0d12;color:#e8edf5;display:flex;align-items:center;justify-content:center;"
+                       f"height:100vh;margin:0;text-align:center;padding:24px\"><div>🎬<br><br>{html.escape(msg)}</div></body>",
+                       "text/html; charset=utf-8")
         elif u.path == "/upload":
             threading.Thread(target=do_upload, daemon=True).start()
             self._send(b'{"status":"uploading"}')
@@ -1168,7 +1219,7 @@ class ClipApp(rumps.App):
         rumps.notification("Clip in Context", "YouTube", "Credentials saved")
 
     def auth_yt(self, _):
-        threading.Thread(target=youtube_service, daemon=True).start()
+        threading.Thread(target=start_oauth, daemon=True).start()
 
     def reload_cfg(self, _):
         load_config()
