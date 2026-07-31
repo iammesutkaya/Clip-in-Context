@@ -15,6 +15,11 @@ Run:     python3 clip_in_context.py
 import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Line-buffer stdout/stderr so /tmp/clipincontext.log is live (launchd block-buffers
+# it otherwise, and every 📌/upload/error line sits in memory until the process exits).
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 import numpy as np
 import sounddevice as sd
 from scipy import signal
@@ -287,6 +292,7 @@ def ai_title(raw, game=""):
 # ---------------- transcribe + orchestrate ----------------
 last_title = ""
 last_raw = ""
+title_pending = False  # True while a /clip is transcribing, so /name and /upload wait for it
 
 def repetitive(text):
     """True if the transcript is a hallucinated loop (few unique words repeated)."""
@@ -369,46 +375,50 @@ def transcribe_clip(audio, **kw):
 
 def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     """Transcribe last `duration` s → title. Returns (title, raw_transcript)."""
-    global last_title, last_raw
-    game = game or live_twitch_game()
-    audio = ring.last(duration)
-    if audio.size < SAMPLE_RATE or float(np.max(np.abs(audio))) < 0.005:
-        # Nothing was captured, so there's no clip to log — say so, otherwise the
-        # trigger looks like it silently did nothing.
-        set_notice("No mic audio in the last %ds — check the mic in Settings" % duration)
-        last_title, last_raw = "Stream Highlight", "No mic speech detected"
-        return last_title, last_raw
-    jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
-    with transcribe_lock:
-        text = transcribe_clip(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
-    if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
-        set_notice("Audio had no recognisable speech — nothing to title")
-        last_title, last_raw = "Awesome Stream Moment", "No clear speech"
-        return last_title, last_raw
-    title = ai_title(text, game)
-    if not title:
-        if not ollama_ok:
-            set_notice("Ollama unreachable — used a fallback title")
-        # Fallback: opening words of what was said (period-splitting mangled URLs
-        # like "www.fema.org" into "org").
-        title = " ".join(text.split()[:8])
-        if len(title) > MAX_TITLE_LENGTH:
-            title = title[:MAX_TITLE_LENGTH].rsplit(" ", 1)[0] + "…"
-    title = clean(title)
-    last_title, last_raw = title, text
-    append_history(title, text)
-    print(f'📌 "{title}"  ← "{text}"')
-    if cfg["enable_clip"]:
-        subprocess.run(["pbcopy"], input=title.encode())
-    if cfg["enable_notif"]:
-        safe = title.replace("\\", "\\\\").replace('"', '\\"')  # AppleScript string-escape
-        subprocess.run(["osascript", "-e",
-            f'display notification "{safe}" with title "🎬 Clip in Context" subtitle "Copied to clipboard"'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    send_to_aitum(title)
-    # NB: no auto-upload here — it would race clip creation. YouTube upload is a
-    # separate step: GET /upload (Aitum webhook after the vertical clip exports).
-    return title, text
+    global last_title, last_raw, title_pending
+    title_pending = True  # /name and /upload block on this so they wait for THIS clip's title
+    try:
+        game = game or live_twitch_game()
+        audio = ring.last(duration)
+        if audio.size < SAMPLE_RATE or float(np.max(np.abs(audio))) < 0.005:
+            # Nothing was captured, so there's no clip to log — say so, otherwise the
+            # trigger looks like it silently did nothing.
+            set_notice("No mic audio in the last %ds — check the mic in Settings" % duration)
+            last_title, last_raw = "Stream Highlight", "No mic speech detected"
+            return last_title, last_raw
+        jargon = ", ".join(list(dict.fromkeys([cfg["streamer_name"]] + cfg["custom_words"] + game_jargon(game)))[:20])
+        with transcribe_lock:
+            text = transcribe_clip(audio, initial_prompt=f"Streamer {cfg['streamer_name']}, game {game}, jargon: {jargon}")
+        if not re.search(r"[a-z0-9]", text.lower()):   # nothing intelligible
+            set_notice("Audio had no recognisable speech — nothing to title")
+            last_title, last_raw = "Awesome Stream Moment", "No clear speech"
+            return last_title, last_raw
+        title = ai_title(text, game)
+        if not title:
+            if not ollama_ok:
+                set_notice("Ollama unreachable — used a fallback title")
+            # Fallback: opening words of what was said (period-splitting mangled URLs
+            # like "www.fema.org" into "org").
+            title = " ".join(text.split()[:8])
+            if len(title) > MAX_TITLE_LENGTH:
+                title = title[:MAX_TITLE_LENGTH].rsplit(" ", 1)[0] + "…"
+        title = clean(title)
+        last_title, last_raw = title, text
+        append_history(title, text)
+        print(f'📌 "{title}"  ← "{text}"')
+        if cfg["enable_clip"]:
+            subprocess.run(["pbcopy"], input=title.encode())
+        if cfg["enable_notif"]:
+            safe = title.replace("\\", "\\\\").replace('"', '\\"')  # AppleScript string-escape
+            subprocess.run(["osascript", "-e",
+                f'display notification "{safe}" with title "🎬 Clip in Context" subtitle "Copied to clipboard"'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        send_to_aitum(title)
+        # NB: no auto-upload here — it would race clip creation. YouTube upload is a
+        # separate step: GET /upload (Aitum webhook after the vertical clip exports).
+        return title, text
+    finally:
+        title_pending = False
 
 # ---------------- Aitum ----------------
 def send_to_aitum(title):
@@ -555,9 +565,20 @@ def safe_filename(name):
     name = re.sub(r'[/:\\?%*|"<>\x00-\x1f]', "-", name).strip(" .-")
     return (name[:80].rstrip() or "Clip")
 
+def wait_for_title(timeout=12.0):
+    """Block while a /clip is mid-flight (title_pending) or none has run yet, so
+    /name and /upload use the CURRENT clip's title — not the previous one. Fixes
+    the off-by-one when Aitum fires /clip and /name/upload without waiting for
+    /clip's response."""
+    start = time.time()
+    while (title_pending or not last_title) and time.time() - start < timeout:
+        time.sleep(0.1)
+    return bool(last_title)
+
 def rename_latest_to_title():
     """Rename the newest clip in the OBS folder to the last AI title. Returns the
     new path, or None. mtime is preserved so it stays 'newest' for /upload."""
+    wait_for_title()
     path = find_latest_clip()
     if not path:
         set_notice("No clip found in the OBS clips folder to rename")
@@ -588,6 +609,7 @@ def do_upload():
     if not cfg["enable_yt"]:
         set_notice("YouTube upload is off — enable it in Settings")
         return
+    wait_for_title()
     path = find_latest_clip()
     if not path:
         set_notice("No clip found in the OBS clips folder to upload")
