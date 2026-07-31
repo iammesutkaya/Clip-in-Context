@@ -292,7 +292,9 @@ def ai_title(raw, game=""):
 # ---------------- transcribe + orchestrate ----------------
 last_title = ""
 last_raw = ""
-title_pending = False  # True while a /clip is transcribing, so /name and /upload wait for it
+title_pending = False    # True while a /clip is transcribing, so /name and /upload wait for it
+last_trigger_ts = 0.0    # time.time() when the last /clip started; /name & /upload wait for a clip newer than this
+last_uploaded_path = None  # dedup guard so the same file never uploads twice
 
 def repetitive(text):
     """True if the transcript is a hallucinated loop (few unique words repeated)."""
@@ -375,8 +377,9 @@ def transcribe_clip(audio, **kw):
 
 def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     """Transcribe last `duration` s → title. Returns (title, raw_transcript)."""
-    global last_title, last_raw, title_pending
+    global last_title, last_raw, title_pending, last_trigger_ts
     title_pending = True  # /name and /upload block on this so they wait for THIS clip's title
+    last_trigger_ts = time.time()  # /name & /upload only act on a clip OBS exported after now
     try:
         game = game or live_twitch_game()
         audio = ring.last(duration)
@@ -575,11 +578,30 @@ def wait_for_title(timeout=12.0):
         time.sleep(0.1)
     return bool(last_title)
 
+def wait_for_fresh_clip(timeout=20.0):
+    """Return the exported clip for the latest trigger: the newest video whose
+    mtime is at/after last_trigger_ts. OBS finishes writing the vertical export a
+    few seconds after /clip, so /name and /upload must WAIT for it — otherwise
+    they grab a stale/previous file (or re-touch an already-uploaded one). Falls
+    back to newest-overall on timeout, and to any file when no trigger has run."""
+    start = time.time()
+    while time.time() - start < timeout:
+        p = find_latest_clip()
+        if not last_trigger_ts:
+            return p
+        try:
+            if p and os.path.getmtime(p) >= last_trigger_ts - 1:  # 1s fs-granularity slack
+                return p
+        except OSError:
+            pass
+        time.sleep(0.3)
+    return find_latest_clip()
+
 def rename_latest_to_title():
     """Rename the newest clip in the OBS folder to the last AI title. Returns the
     new path, or None. mtime is preserved so it stays 'newest' for /upload."""
     wait_for_title()
-    path = find_latest_clip()
+    path = wait_for_fresh_clip()
     if not path:
         set_notice("No clip found in the OBS clips folder to rename")
         return None
@@ -606,14 +628,19 @@ def do_upload():
     """Upload the newest exported clip with the last generated title. Call this
     AFTER the vertical clip is exported (e.g. an Aitum webhook after 'Create
     vertical clip') so it isn't raced against clip creation."""
+    global last_uploaded_path
     if not cfg["enable_yt"]:
         set_notice("YouTube upload is off — enable it in Settings")
         return
     wait_for_title()
-    path = find_latest_clip()
+    path = wait_for_fresh_clip()
     if not path:
         set_notice("No clip found in the OBS clips folder to upload")
         return
+    if path == last_uploaded_path:
+        set_notice("Newest clip was already uploaded — skipping duplicate", "ok")
+        return
+    last_uploaded_path = path
     set_notice(f"Uploading {os.path.basename(path)}…", "ok")
     upload_youtube_async(path, last_title or "Stream Highlight", last_raw, detected_game)
 
