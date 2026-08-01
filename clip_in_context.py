@@ -576,8 +576,13 @@ def _upload_worker():
         try:
             _do_youtube_upload(path, title, raw, game)
         except Exception as e:
+            msg = str(e)
             print(f"❌ upload failed: {e}")
-            set_notice(f"YouTube upload failed: {e}")
+            if any(k in msg for k in ("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded")):
+                # YouTube Data API: 10,000 units/day, an upload costs 1,600 → ~6/day.
+                set_notice("Daily YouTube upload limit reached (~6/day). Resets ~midnight Pacific, or request a quota increase.")
+            else:
+                set_notice(f"YouTube upload failed: {e}")
         finally:
             _upload_q.task_done()
 
