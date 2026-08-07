@@ -543,12 +543,50 @@ def _do_youtube_upload(path, title, raw, game):
         set_notice("YouTube not authenticated — click Authenticate in the YouTube tab")
         return
     from googleapiclient.http import MediaFileUpload
-    yt_title = title if "#shorts" in title.lower() else f"{title} #Shorts"
-    tag = f"#{game.replace(' ', '')}" if game else "#Gaming"
-    body = {"snippet": {"title": yt_title[:100],
-                        "description": f'{cfg["streamer_name"]} stream highlight.\n\n🎙️ "{raw}"\n\n#Shorts {tag} #TwitchClips',
-                        "tags": ["Shorts", "TwitchClips", game or "Gaming"], "categoryId": "20"},
-            "status": {"privacyStatus": cfg["yt_privacy"], "selfDeclaredMadeForKids": False}}
+
+    # Build discoverable hashtags & title for YouTube Shorts algorithm
+    g_name = game or cfg.get("default_game") or ""
+    clean_game = re.sub(r'[^a-zA-Z0-9]', '', g_name) if g_name else ""
+
+    # Hashtags to maximize reach & indexing in Shorts feed
+    hashtags = ["#Shorts"]
+    if clean_game and clean_game.lower() not in ("justchatting", "gaming"):
+        hashtags.append(f"#{clean_game}")
+    hashtags.extend(["#Gaming", "#TwitchClips", "#ShortsViral"])
+
+    # Construct optimized YouTube title (Max 100 characters)
+    base_title = title.strip()
+    tag_suffix = " ".join([h for h in hashtags if h.lower() not in base_title.lower()])
+    yt_title = f"{base_title} {tag_suffix}".strip()[:100]
+
+    # Video tags for YouTube search indexing
+    tags_list = ["Shorts", "Gaming", "TwitchClips", "ViralShorts", "StreamHighlights"]
+    if g_name:
+        tags_list.insert(0, g_name)
+        tags_list.append(f"{g_name} clips")
+    if cfg.get("streamer_name"):
+        tags_list.append(cfg["streamer_name"])
+
+    game_label = f" | {g_name}" if g_name else ""
+    description = (
+        f'{base_title}{game_label}\n\n'
+        f'🎙️ "{raw}"\n\n'
+        f'Highlight by {cfg.get("streamer_name", "Streamer")}\n\n'
+        f'{" ".join(hashtags)}'
+    )
+
+    body = {
+        "snippet": {
+            "title": yt_title,
+            "description": description,
+            "tags": tags_list,
+            "categoryId": "20"  # 20 = Gaming category
+        },
+        "status": {
+            "privacyStatus": cfg.get("yt_privacy", "public"),
+            "selfDeclaredMadeForKids": False
+        }
+    }
     chunk = 1024 * 1024
     req = svc.videos().insert(part="snippet,status", body=body,
                               media_body=MediaFileUpload(path, chunksize=chunk, resumable=True))
