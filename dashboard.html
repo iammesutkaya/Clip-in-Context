@@ -37,7 +37,6 @@
   .scriptbox{font-style:italic;color:var(--dim);background:#0d0f14;border:1px solid var(--card-border);
     border-radius:var(--radius);padding:8px 12px 0;margin-top:8px;font-size:13px;line-height:19px;
     overflow:hidden;height:48px}                    /* 2 lines: 2*19 + 8 top pad + 2 border */
-  #cap{font-style:normal;color:var(--txt);height:67px}   /* 3 lines */
   .metarow{display:flex;justify-content:space-between;align-items:center;margin-top:8px;
     padding:8px 12px;font-size:12px;color:var(--dim)}
   /* Settings tabs: one panel at a time in a stable frame — switching tabs
@@ -171,15 +170,12 @@
   <div class="card" style="display:flex;flex-direction:column;gap:12px">
 
     <div class="tabs" role="tablist">
-      <button type="button" class="tab on" data-tab="0">💬 Live</button>
+      <button type="button" class="tab on" data-tab="0">✂️ Clip</button>
       <button type="button" class="tab" data-tab="1">🕒 Recent Clips</button>
       <button type="button" class="tab" data-tab="2">📤 Queue</button>
     </div>
 
     <div class="tabpanel stack on" data-panel="0">
-
-    <!-- LIVE CAPTIONS (the tab label already says "Live"; mic meter is in the header) -->
-    <div class="scriptbox" id="cap" style="margin-top:0">Listening…</div>
 
     <!-- TRIGGER BUTTON (100% FULL WIDTH) -->
     <div class="row">
@@ -197,14 +193,14 @@
 
     <div class="tabpanel" data-panel="1">
       <div id="clearWrap" style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
-      <!-- min-height matches the Live panel so the card doesn't resize between tabs -->
-      <div id="history" style="display:flex;flex-direction:column;gap:4px;font-size:12px;min-height:209px">No clips yet.</div>
+      <!-- min-height matches the Clip panel so the card doesn't resize between tabs -->
+      <div id="history" style="display:flex;flex-direction:column;gap:4px;font-size:12px;min-height:168px">No clips yet.</div>
     </div>
 
     <!-- REVIEW QUEUE: approve clips after the stream; they publish at the next free slot -->
     <div class="tabpanel" data-panel="2">
       <div class="qhead"><span id="qsum">Nothing to review</span><button class="mini" onclick="suggest(this)">✨ Suggest titles</button></div>
-      <div id="queue" style="display:flex;flex-direction:column;gap:8px;min-height:209px"></div>
+      <div id="queue" style="display:flex;flex-direction:column;gap:8px;min-height:168px"></div>
     </div>
 
   </div>
@@ -306,13 +302,12 @@ function quitApp(btn){
   btn.dataset.armed='1';btn.textContent='Confirm?';
   setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Quit';}},2500);
 }
-setInterval(async()=>{try{
+setInterval(async()=>{if(document.hidden)return;try{
   const s=await(await fetch('/api/status')).json();
   const nf=0.0003,v=s.mic_volume||0;
   let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
   {const vu=$('vu');if(vu)vu.style.width=p+'%';const v2=$('vu2');if(v2)v2.style.height=p+'%';}
   $('cat').textContent=s.category||'auto';
-  if(s.live)$('cap').textContent=s.live;
   const wErr=s.whisper_err?'error':(s.whisper?'ready':'loading…'),wCol=s.whisper_err?'#f87171':(s.whisper?'var(--ok)':'#fbbf24');
   $('whDot').style.color=wCol;$('whTxt').textContent=wErr;
   const oCol=s.ollama?'var(--ok)':'#f87171',oTxt=s.ollama?'ready':'down';
@@ -336,7 +331,7 @@ setInterval(async()=>{try{
   paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
   if(s.last_title){$('ttl').textContent=s.last_title;}
   if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
-}catch(e){}},150);
+}catch(e){}},1000);   // 1s, and skipped while the tab is hidden: keep the machine free for the stream
 async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.disabled=true;
   try{const d=await(await fetch('/clip?json=1')).json();
     if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
@@ -401,5 +396,5 @@ async function act(b,status){const r=b.closest('.qrow'),i=r.querySelector('input
 async function rel(c){c.blur();await post('/api/queue/update',{id:c.closest('.qrow').dataset.id,related:c.checked});loadQueue(true);}
 async function suggest(b){b.disabled=true;await post('/api/queue/suggest',{});toast('Suggesting titles…');
   setTimeout(()=>{b.disabled=false;loadQueue(true);},4000);}
-setInterval(()=>{if(document.querySelector('.tabpanel.on #queue'))loadQueue();},5000);
+setInterval(()=>{if(!document.hidden&&document.querySelector('.tabpanel.on #queue'))loadQueue();},5000);
 </script></body></html>

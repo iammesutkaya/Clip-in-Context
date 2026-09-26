@@ -116,7 +116,6 @@ WHISPER_CHOICES = [
 
 recording_paused = False
 mic_volume = 0.0
-live_text = ""                       # continuous live caption (title is clip-only)
 transcribe_lock = clip_editor.WHISPER_LOCK   # MLX isn't reentrant; shared with the editor
 clip_action_lock = threading.Lock()   # Serialize clip renaming and file operations to prevent race conditions
 whisper_ok = False                   # True once MLX has transcribed successfully
@@ -1011,29 +1010,6 @@ def apply_settings(data):
         whisper_ok = False                       # load the new model (first use downloads it)
         threading.Thread(target=warmup_whisper, daemon=True).start()
 
-LIVE_WHISPER_MODEL = "mlx-community/whisper-base.en-mlx"
-
-def live_loop():
-    """Continuously transcribe the last few seconds for live captions (no title)."""
-    global live_text
-    while True:
-        time.sleep(2.0)
-        if recording_paused:
-            continue
-        audio = ring.last(5)
-        if audio.size < SAMPLE_RATE or float(np.max(np.abs(audio))) < 0.01:
-            continue
-        try:
-            with transcribe_lock:
-                # Dashboard-only captions: small model, so the GPU stays free for OBS + the game.
-                res = mlx_whisper.transcribe(boost(audio), path_or_hf_repo=LIVE_WHISPER_MODEL,
-                                             condition_on_previous_text=False)
-            t = " ".join(res.get("text", "").split())
-            if re.search(r"[a-z0-9]", t.lower()) and not repetitive(t):
-                live_text = dedup(t)
-        except Exception:
-            pass
-
 def status_json():
     yt_st = youtube_auth_status()
     return {
@@ -1046,7 +1022,6 @@ def status_json():
         "yt_status": yt_st["status"],
         "notice": notice if (time.time() - notice_ts < 30) else "",
         "notice_level": notice_level,
-        "live": live_text,
         "last_title": last_title,
         "last_raw": last_raw,
         "category": detected_game,
@@ -1351,9 +1326,11 @@ class ClipApp(rumps.App):
 
 
 if __name__ == "__main__":
+    # Stream first: yield CPU to OBS and the game. Audio capture runs on CoreAudio's
+    # real-time thread, which niceness doesn't touch, so the ring buffer never drops.
+    os.nice(10)
     start_stream()
     threading.Thread(target=start_http, daemon=True).start()
-    threading.Thread(target=live_loop, daemon=True).start()
     threading.Thread(target=health_loop, daemon=True).start()
     threading.Thread(target=warmup_whisper, daemon=True).start()
     threading.Thread(target=_upload_worker, daemon=True).start()
