@@ -274,10 +274,11 @@ def ai_title(raw, game=""):
     if not raw or len(raw) < 5:
         return None
     prompt = (
-        f'A live streamer just said this on stream:\n"{raw}"\n\n'
-        "Write ONE short, catchy clip title (max 8 words) that captures what they ACTUALLY said above.\n"
-        "- Punchy and natural, like a real Twitch/YouTube clip title.\n"
-        "- Base it ONLY on the words above. Do NOT invent games, characters, names, or events that were not said.\n"
+        f'A streamer playing {game or "a game"} just said this during a highlight moment on stream:\n"{raw}"\n\n'
+        "Write ONE short YouTube Shorts title (max 8 words) that makes someone scrolling past stop and watch.\n"
+        "- Describe the situation or stakes (clutch win, fail, surprise, close call), not a word-for-word quote.\n"
+        "- Infer only from the words above. Do NOT invent characters, bosses, names, or events that weren't implied.\n"
+        "- Ignore filler, grunts, and stray words that don't fit the sentence.\n"
         "- Family-friendly. No quotes, no hashtags, no emoji, no ending period.\n"
         "Title:")
     # Ollama
@@ -384,13 +385,20 @@ def transcribe_long(audio, **kw):
             parts.append(t)
     return " ".join(parts)
 
+# Whisper emits a stray token on a breath/click at clip start ("Rom Okay. No!").
+# ponytail: fixed word list; add new offenders here as they show up in clips.jsonl.
+LEAD_JUNK = re.compile(r"^(?:(?:rom|um+|uh+|hm+|mm+)\b[\s,.!?…-]*)+", re.IGNORECASE)
+
+def strip_lead_junk(text):
+    return LEAD_JUNK.sub("", text).strip()
+
 def transcribe_clip(audio, **kw):
     """One full-context pass over the whole clip so the title sees everything
     that was said. Only fall back to stitched 5s chunks if that pass loops."""
-    one = dedup(" ".join(transcribe(boost(audio), **kw).get("text", "").split()))
+    one = strip_lead_junk(dedup(" ".join(transcribe(boost(audio), **kw).get("text", "").split())))
     if re.search(r"[a-z0-9]", one.lower()) and not repetitive(one):
         return one
-    return dedup(transcribe_long(audio, **kw))
+    return strip_lead_junk(dedup(transcribe_long(audio, **kw)))
 
 def make_clip(duration=DEFAULT_CLIP_SECONDS, game=""):
     """Transcribe last `duration` s → title. Returns (title, raw_transcript)."""
@@ -562,25 +570,6 @@ def write_client_secret():
         "token_uri": "https://oauth2.googleapis.com/token",
         "redirect_uris": ["http://localhost"]}}, open(CLIENT_SECRET_FILE, "w"), indent=2)
 
-def get_auto_youtube_vod_url():
-    """Automatically fetches the streamer's active or newest live stream VOD URL directly from YouTube."""
-    stream_url = cfg.get("stream_url", "").strip()
-    if stream_url and "youtu" in stream_url and not stream_url.endswith("/live"):
-        return stream_url
-    
-    handle = cfg.get("youtube_handle") or cfg.get("streamer_name") or cfg.get("twitch_channel") or "mesutkaya"
-    handle = handle.lstrip("@")
-    target_url = f"https://www.youtube.com/@{handle}/live"
-    try:
-        req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
-        html = urllib.request.urlopen(req, timeout=3).read().decode("utf-8")
-        m = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-        if m:
-            return f"https://youtu.be/{m.group(1)}"
-    except Exception:
-        pass
-    return stream_url or f"https://youtube.com/@{handle}/live"
-
 GAME_HASHTAG_MAP = {
     # Zelda Tears of the Kingdom mappings
     "the legend of zelda: tears of the kingdom": ["#zelda", "#totk"],
@@ -676,14 +665,11 @@ def _do_youtube_upload(path, title, raw, game):
         tags_list.append(cfg["streamer_name"])
 
     game_label = f" | {g_name}" if g_name else ""
-    stream_link = get_auto_youtube_vod_url()
-    stream_cta = f"📺 Watch Full Stream / VOD: {stream_link}\n" if stream_link else ""
 
     description = (
         f'{base_title}{game_label}\n\n'
         f'🎙️ "{raw}"\n\n'
-        f'Highlight by {cfg.get("streamer_name", "Streamer")}\n'
-        f'{stream_cta}\n'
+        f'Highlight by {cfg.get("streamer_name", "Streamer")}\n\n'
         f'{" ".join(hashtags)}'
     )
 
@@ -831,6 +817,7 @@ def run_clip_editor_job(target_path, title=None, story_cut=True):
                 "preserve_story_span": cfg.get("preserve_story_span", True),
                 "segment_padding_sec": cfg.get("segment_padding_sec", 0.5),
                 "enable_cta": True,
+                "show_banner": cfg.get("show_banner", True),
             }
         )
         if edited and os.path.exists(edited):

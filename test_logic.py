@@ -11,6 +11,12 @@ def test_dedup():
     assert cb.dedup("my best friend and my best friend") == "my best friend and my best friend"
     assert cb.dedup("hello world") == "hello world"
 
+def test_strip_lead_junk():
+    assert cb.strip_lead_junk("Rom Okay. No! Wait.") == "Okay. No! Wait."
+    assert cb.strip_lead_junk("Um, uh Rom where is it") == "where is it"
+    assert cb.strip_lead_junk("Romance is dead") == "Romance is dead"   # word boundary
+    assert cb.strip_lead_junk("let's go um") == "let's go um"            # only leading
+
 def test_repetitive():
     assert cb.repetitive("tricked " * 10)                                   # hallucinated loop
     assert not cb.repetitive("I thought it was an incel angle because that is a real problem")
@@ -71,7 +77,7 @@ def test_game_hashtags():
     assert cb.get_game_hashtags("") == []
 
 if __name__ == "__main__":
-    test_dedup(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_story_silence(); test_game_hashtags()
+    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_story_silence(); test_game_hashtags()
     print("all logic tests OK")
 
 
