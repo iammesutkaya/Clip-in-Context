@@ -49,22 +49,31 @@ def test_clip_editor():
         if os.path.exists(path):
             os.remove(path)
 
-def test_story_silence():
-    import clip_editor
-    opts = {"max_silence_gap_sec": 6.0, "preserve_story_span": True, "segment_padding_sec": 0.5}
-    valid_segs = [
-        {"id": 0, "start": 5.0, "end": 10.0, "text": "Watch this setup."},
-        {"id": 1, "start": 15.0, "end": 20.0, "text": "NO WAY IT WORKED!"} # 5s gap of silence in between
-    ]
-    # Test contiguous selection check
-    sids_contiguous = [0, 1]
-    is_contig = (sorted(sids_contiguous) == list(range(min(sids_contiguous), max(sids_contiguous) + 1)))
-    assert is_contig is True
+def test_find_latest_skips_editor_output():
+    import tempfile, os
+    d = tempfile.mkdtemp()
+    orig = cb.cfg["obs_clips_dir"]
+    try:
+        cb.cfg["obs_clips_dir"] = d
+        for i, n in enumerate(["Clip.mp4", "Clip_STORY.mp4", "Clip_edited.mp4", "Clip_story_raw.mp4"]):
+            p = os.path.join(d, n); open(p, "w").close(); os.utime(p, (1000 + i, 1000 + i))
+        assert os.path.basename(cb.find_latest_clip()) == "Clip.mp4"   # newer editor files ignored
+    finally:
+        cb.cfg["obs_clips_dir"] = orig
 
-    # Test non-contiguous selection check (jump cuts preserved when filler IDs 2, 3 skipped)
-    sids_jump = [0, 1, 4, 5]
-    is_jump_contig = (sorted(sids_jump) == list(range(min(sids_jump), max(sids_jump) + 1)))
-    assert is_jump_contig is False
+def test_draw_image_path_sandbox():
+    import draw_showcase as ds, tempfile, os
+    d = tempfile.mkdtemp()
+    orig = ds.SCREENSHOTS_DIR
+    try:
+        ds.SCREENSHOTS_DIR = d
+        ok = os.path.join(d, "a.png"); open(ok, "w").close()
+        assert ds._screenshot_path(ok) == os.path.realpath(ok)
+        assert ds._screenshot_path(os.path.join(d, "..", "x.png")) is None     # traversal
+        assert ds._screenshot_path(os.path.abspath(__file__)) is None           # not a png / outside
+        assert ds._screenshot_path("") is None
+    finally:
+        ds.SCREENSHOTS_DIR = orig
 
 def test_game_hashtags():
     assert cb.get_game_hashtags("The Legend of Zelda: Tears of the Kingdom") == ["#zelda", "#totk"]
@@ -77,7 +86,7 @@ def test_game_hashtags():
     assert cb.get_game_hashtags("") == []
 
 if __name__ == "__main__":
-    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_story_silence(); test_game_hashtags()
+    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags()
     print("all logic tests OK")
 
 

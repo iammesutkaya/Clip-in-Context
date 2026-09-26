@@ -25,6 +25,7 @@ import json
 import subprocess
 import tempfile
 import shutil
+import threading
 from PIL import Image, ImageDraw, ImageFont
 
 # Ensure standard brew / local bin paths are in PATH (needed when running under launchd / GUI app)
@@ -33,6 +34,10 @@ for _p in ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.homebre
         os.environ["PATH"] = f"{_p}{os.pathsep}" + os.environ.get("PATH", "")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# MLX Whisper isn't reentrant. clip_in_context's live-caption loop and clip
+# trigger share this lock, so an edit never transcribes concurrently with them.
+WHISPER_LOCK = threading.Lock()
 
 # Spec v1 Colors (RGBA)
 WHITE = (255, 255, 255, 255)
@@ -112,7 +117,9 @@ def transcribe_words(video_path, model_repo="mlx-community/whisper-large-v3-turb
     try:
         extract_audio(video_path, wav_path)
         import mlx_whisper
-        res = mlx_whisper.transcribe(wav_path, path_or_hf_repo=model_repo, word_timestamps=True)
+        with WHISPER_LOCK:
+            res = mlx_whisper.transcribe(wav_path, path_or_hf_repo=model_repo, word_timestamps=True,
+                                         condition_on_previous_text=False)
         
         words = []
         for seg in res.get("segments", []):
@@ -555,7 +562,9 @@ def select_story_segments(video_path, model_repo="mlx-community/whisper-large-v3
     try:
         extract_audio(video_path, wav_path)
         import mlx_whisper
-        res = mlx_whisper.transcribe(wav_path, path_or_hf_repo=model_repo)
+        with WHISPER_LOCK:
+            res = mlx_whisper.transcribe(wav_path, path_or_hf_repo=model_repo,
+                                         condition_on_previous_text=False)
         segments = res.get("segments", [])
         if not segments:
             return [], "", ""

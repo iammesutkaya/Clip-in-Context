@@ -32,6 +32,9 @@ import mlx_whisper
 import requests
 import rumps
 
+import clip_editor
+import draw_showcase
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(HERE, "config.json")
 TOKEN_FILE = os.path.join(HERE, "youtube_token.json")
@@ -104,7 +107,7 @@ WHISPER_CHOICES = [
 recording_paused = False
 mic_volume = 0.0
 live_text = ""                       # continuous live caption (title is clip-only)
-transcribe_lock = threading.Lock()   # MLX isn't reentrant; serialize live loop vs clip trigger
+transcribe_lock = clip_editor.WHISPER_LOCK   # MLX isn't reentrant; shared with the editor
 clip_action_lock = threading.Lock()   # Serialize clip renaming and file operations to prevent race conditions
 whisper_ok = False                   # True once MLX has transcribed successfully
 whisper_err = False                  # True if the model failed to load
@@ -466,6 +469,8 @@ def send_to_aitum(title):
         print(f"⚠️ aitum: {e}")
 
 # ---------------- YouTube ----------------
+EDITOR_SUFFIXES = ("_edited", "_STORY", "_story_raw")   # clip_editor outputs, not OBS exports
+
 def find_latest_clip(max_age=None):
     """Newest video in the OBS clips folder. max_age (seconds) optionally limits
     to recently-modified files; None = newest regardless of age."""
@@ -475,7 +480,9 @@ def find_latest_clip(max_age=None):
     now, best, best_m = time.time(), None, 0
     for root, _, files in os.walk(d):
         for f in files:
-            if f.lower().endswith((".mp4", ".mov", ".mkv", ".webm")) and not f.startswith("."):
+            stem = os.path.splitext(f)[0]
+            if (f.lower().endswith((".mp4", ".mov", ".mkv", ".webm")) and not f.startswith(".")
+                    and not stem.endswith(EDITOR_SUFFIXES)):
                 p = os.path.join(root, f)
                 try:
                     m = os.path.getmtime(p)
@@ -668,7 +675,7 @@ def _do_youtube_upload(path, title, raw, game):
 
     description = (
         f'{base_title}{game_label}\n\n'
-        f'🎙️ "{raw}"\n\n'
+        f'🎙️ "{clean(raw)}"\n\n'
         f'Highlight by {cfg.get("streamer_name", "Streamer")}\n\n'
         f'{" ".join(hashtags)}'
     )
@@ -834,6 +841,9 @@ def do_upload():
         set_notice("YouTube uploads disabled in settings", "ok")
         return
     path = rename_latest_to_title() or wait_for_fresh_clip()
+    # Snapshot now: editing takes ~a minute, and a new /clip in that window
+    # would otherwise hand this upload the NEXT clip's title/transcript.
+    title, raw, game = last_title or "Stream Highlight", last_raw, detected_game
     if not path or not os.path.exists(path):
         set_notice("No clip available to upload", "err")
         return
@@ -841,12 +851,12 @@ def do_upload():
         set_notice("Newest clip was already uploaded — skipping duplicate", "ok")
         return
 
-    upload_path = run_clip_editor_job(path)
+    upload_path = run_clip_editor_job(path, title=title)
     if not upload_path or not os.path.exists(upload_path):
         set_notice("Clip editing failed or file missing — aborting upload", "err")
         return
     last_uploaded_path = path
-    upload_youtube_async(upload_path, last_title or "Stream Highlight", last_raw, detected_game)
+    upload_youtube_async(upload_path, title, raw, game)
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
 PAGE = """<!DOCTYPE html><html lang="en"><head>
@@ -1231,6 +1241,8 @@ def apply_settings(data):
         whisper_ok = False                       # load the new model (first use downloads it)
         threading.Thread(target=warmup_whisper, daemon=True).start()
 
+LIVE_WHISPER_MODEL = "mlx-community/whisper-base.en-mlx"
+
 def live_loop():
     """Continuously transcribe the last few seconds for live captions (no title)."""
     global live_text
@@ -1243,7 +1255,9 @@ def live_loop():
             continue
         try:
             with transcribe_lock:
-                res = transcribe(boost(audio))
+                # Dashboard-only captions: small model, so the GPU stays free for OBS + the game.
+                res = mlx_whisper.transcribe(boost(audio), path_or_hf_repo=LIVE_WHISPER_MODEL,
+                                             condition_on_previous_text=False)
             t = " ".join(res.get("text", "").split())
             if re.search(r"[a-z0-9]", t.lower()) and not repetitive(t):
                 live_text = dedup(t)
@@ -1311,67 +1325,7 @@ def dashboard_html():
         page = page.replace(k, str(v))
     return page
 
-# ---------------- Speed Draw Showcase Event State ----------------
-_draw_showcase_state = {
-    "timestamp": 0,
-    "event": "showcase",
-    "number": 1,
-    "prompt": "",
-    "requester": "",
-    "image_path": ""
-}
-_draw_sse_queues = set()
-
-def broadcast_draw_event(event_dict):
-    payload = f"data: {json.dumps(event_dict)}\n\n".encode("utf-8")
-    for q in list(_draw_sse_queues):
-        try:
-            q.put_nowait(payload)
-        except Exception:
-            pass
-
-def notify_draw_showcase(number, prompt, requester, image_path):
-    global _draw_showcase_state
-    _draw_showcase_state = {
-        "timestamp": time.time(),
-        "event": "showcase",
-        "number": number,
-        "prompt": prompt,
-        "requester": requester,
-        "image_path": image_path,
-        "image_url": f"http://localhost:5001/draw/latest_image?t={int(time.time()*1000)}"
-    }
-    broadcast_draw_event(_draw_showcase_state)
-
-def get_aitum_drawing_state():
-    state_db = os.path.expanduser("~/.aitum/state.db")
-    data = {
-        "number": 1,
-        "prompt": "Freestyle Sketch",
-        "requester": "Stream Viewer",
-        "mtime": 0
-    }
-    if os.path.exists(state_db):
-        try:
-            data["mtime"] = os.path.getmtime(state_db)
-            with open(state_db, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip(): continue
-                    try:
-                        entry = json.loads(line)
-                        name = entry.get("name")
-                        val = entry.get("value")
-                        if name == "Drawing Request" and val:
-                            data["prompt"] = str(val)
-                        elif name == "Drawing Requester" and val:
-                            data["requester"] = str(val)
-                        elif name == "Drawing Request Number" and val is not None:
-                            data["number"] = int(val)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-    return data
+CROSS_SITE_OK = {"/oauth2callback"} | draw_showcase.READ_ONLY
 
 class Handler(BaseHTTPRequestHandler):
     def handle_one_request(self):
@@ -1401,14 +1355,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
 
+    def _forbidden(self, path):
+        """Reject non-localhost Host headers (DNS rebinding) and cross-site browser
+        requests (CSRF: any open web page can hit localhost). Only Google's OAuth
+        redirect and the read-only overlay routes OBS browser sources load are exempt."""
+        host = self.headers.get("Host", "").split(":")[0].lower()
+        cross = self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site"
+        if host not in ("localhost", "127.0.0.1") or (cross and path not in CROSS_SITE_OK):
+            self._send(b'{"error": "forbidden (cross-site/invalid host)"}', "application/json", 403)
+            return True
+        return False
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
-        # Security validation (Bug #5): Reject cross-site requests and non-localhost Host headers,
-        # but allow OAuth callback redirects from Google and local overlay endpoints under /draw/.
-        host = self.headers.get("Host", "").split(":")[0].lower()
-        sec_fetch = self.headers.get("Sec-Fetch-Site", "").lower()
-        if host not in ("localhost", "127.0.0.1") or (sec_fetch == "cross-site" and u.path != "/oauth2callback" and not u.path.startswith("/draw/")):
-            self._send(b'{"error": "forbidden (cross-site/invalid host)"}', "application/json", 403)
+        if self._forbidden(u.path):
             return
 
         q = urllib.parse.parse_qs(u.query)
@@ -1444,90 +1404,8 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/upload":
             threading.Thread(target=do_upload, daemon=True).start()
             self._send(b'{"status":"uploading"}')
-        elif u.path == "/draw/upload":
-            script_path = os.path.expanduser("~/OBS source/04_misc/04_scripts/draw_game.py")
-            subprocess.Popen([sys.executable, script_path, "upload"])
-            self._send(b'{"status":"uploading_drawing"}')
-        elif u.path == "/draw/countdown":
-            try:
-                sec = int(q.get("seconds", ["60"])[0])
-            except (ValueError, TypeError):
-                sec = 60
-            broadcast_draw_event({"event": "countdown", "seconds": sec})
-            self._send(json.dumps({"status": "countdown_started", "seconds": sec}).encode("utf-8"), "application/json")
-        elif u.path == "/draw/stop_countdown":
-            broadcast_draw_event({"event": "stop_countdown"})
-            self._send(b'{"status":"countdown_stopped"}', "application/json")
-        elif u.path == "/draw/events":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            client_queue = queue.Queue()
-            _draw_sse_queues.add(client_queue)
-            try:
-                self.wfile.write(b": keepalive\n\n")
-                self.wfile.flush()
-                while True:
-                    try:
-                        msg = client_queue.get(timeout=20)
-                        self.wfile.write(msg)
-                        self.wfile.flush()
-                    except queue.Empty:
-                        self.wfile.write(b": ping\n\n")
-                        self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            finally:
-                _draw_sse_queues.discard(client_queue)
-            return
-        elif u.path == "/draw/latest_status":
-            self._send(json.dumps(_draw_showcase_state))
-        elif u.path == "/draw/latest_image":
-            img_path = _draw_showcase_state.get("image_path")
-            if not (img_path and os.path.exists(img_path)):
-                scr_dir = os.path.expanduser("~/OBS source/04_misc/03_screenshots")
-                pngs = [os.path.join(scr_dir, f) for f in os.listdir(scr_dir) if f.endswith(".png")]
-                img_path = max(pngs, key=os.path.getmtime) if pngs else None
-            if img_path and os.path.exists(img_path):
-                try:
-                    with open(img_path, "rb") as f:
-                        data = f.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "image/png")
-                    self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    self.wfile.write(data)
-                    return
-                except Exception as e:
-                    self._send(f'{{"error":"{e}"}}', "application/json", 500)
-                    return
-            self._send(b'{"error":"no image found"}', "application/json", 404)
-        elif u.path == "/draw/notify_showcase":
-            num = int(q.get("num", [1])[0])
-            prompt = q.get("prompt", ["Freestyle Sketch"])[0]
-            requester = q.get("requester", ["Stream Viewer"])[0]
-            path = q.get("path", [""])[0]
-            notify_draw_showcase(num, prompt, requester, path)
-            self._send(b'{"status":"notified"}')
-        elif u.path == "/draw/test_showcase":
-            scr_dir = os.path.expanduser("~/OBS source/04_misc/03_screenshots")
-            pngs = [os.path.join(scr_dir, f) for f in os.listdir(scr_dir) if f.endswith(".png")]
-            img_path = max(pngs, key=os.path.getmtime) if pngs else ""
-            notify_draw_showcase(5, "A test - the draw game works... I think", "MesutKaya", img_path)
-            self._send(b'{"status":"test_triggered"}')
-        elif u.path == "/draw/active":
-            st = get_aitum_drawing_state()
-            self._send(json.dumps(st).encode("utf-8"), "application/json")
-        elif u.path in ("/draw/dismiss", "/draw/peel", "/draw/hide", "/draw/clear"):
-            broadcast_draw_event({"event": "dismiss"})
-            self._send(b'{"status":"dismissed"}')
-        elif u.path in ("/draw/restore", "/draw/show"):
-            broadcast_draw_event({"event": "restore"})
-            self._send(b'{"status":"restored"}')
+        elif u.path.startswith("/draw/"):
+            draw_showcase.handle(self, u.path, q)
         elif u.path == "/edit":
             target_path = q.get("file", [""])[0] or wait_for_fresh_clip()
             # Security path sandbox (Bug #6): Restrict /edit target file paths to clip directories
@@ -1559,6 +1437,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if self._forbidden(path):
+            return
         if path == "/settings":
             n = int(self.headers.get("Content-Length", 0))
             try:

@@ -1,10 +1,12 @@
-# Clip Backtrack — single-process macOS menu-bar app (run from Terminal)
+# Clip in Context — single-process macOS menu-bar app (run from Terminal)
 rumps
 sounddevice
 numpy
 scipy
 mlx-whisper
 requests
+# Clip editor overlays (captions, hook banner)
+pillow
 # YouTube Shorts auto-upload (optional)
 google-api-python-client
 google-auth-oauthlib
