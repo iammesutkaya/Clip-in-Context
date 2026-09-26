@@ -1,118 +1,82 @@
 # Clip in Context
 
-Rolling mic transcript backtrack + AI clip titler for macOS streamers.
+Rolling mic transcript backtrack, AI clip titler, and **AI Video Editor** for macOS streamers.
 
-Press a button → the last 30s of your speech is transcribed locally (MLX
-Whisper), rewritten into a Twitch-style clip title (Ollama), copied to the
-clipboard, pushed to Aitum, and optionally uploaded as a YouTube Short. All
-local — no cloud, no per-clip cost.
+Press a button → your speech is transcribed locally (**MLX Whisper**), rewritten into a Twitch-style clip title (**Qwen 2.5 / Ollama**), automatically edited with **Karaoke-style dynamic subtitles (Spec v1)** and ending CTA cards, renamed, and uploaded as a YouTube Short. All 100% local on your Mac — no cloud cost, no per-clip fees.
 
 ```
-mic → rolling 30s buffer → (trigger) → MLX Whisper → AI title
-    → clipboard + notification → Aitum → optional YouTube Short
+mic → rolling audio buffer → (trigger) → MLX Whisper → Qwen 2.5 AI Title
+    → Automatic Video Editor (Karaoke Captions + Story Splicing + End CTA)
+    → Clipboard + Notification → Aitum → YouTube Shorts Upload
 ```
 
 <img src="screenshots/260730_clip-in-context.png" alt="Clip in Context dashboard — live captions, trigger, generated title and settings" width="420">
 
-*The dashboard, sized for an OBS custom browser dock.*
+---
 
-## Requirements
-- **Apple Silicon Mac** (MLX Whisper needs an M-series chip).
-- **[Ollama](https://ollama.com)** for AI titles: `ollama serve` running, with a
-  model pulled — `ollama pull llama3.2` (or `qwen2.5`). Without it, titles fall
-  back to the last spoken sentence (or OpenAI if `OPENAI_API_KEY` is set).
-- Optional: OBS (for YouTube upload), Aitum Nexus (for the title variable).
+## 🌟 Key Features
 
-## Install
+* 🎬 **Automated AI Video Editor (`clip_editor.py`)**:
+  * 🔤 **Karaoke Caption Style (Spec v1)**: **SF Pro Display Heavy (92px)** font, spoken sentence case, opaque black stroke, drop shadow, and clean lower-third placement (`center_y = 1300`).
+  * 🎨 **Single Unified Phrase Colors**: Emotional beat color assigned per phrase (Red `#FF5A5A` for tension/fear, Green `#70E670` for payoff/success, Gold `#FFC93C` for neutral) with zero color mixing.
+  * ✂️ **Smart Spoken Pause & Punctuation Chunking**: Automatically breaks text into new lines on natural pauses (`gap > 0.40s`) and sentence punctuation (`. ! ? ,`).
+  * 📣 **Ending Creator CTA Cards**: Static `"LIVE MOST NIGHTS"` + `"follow for more!"` cards rendered in the final 2 seconds with speech captions automatically clearing out.
+  * 🔒 **Sample-Accurate A/V Sync & Untouched Audio**: Input-first frame decoding seeking (`-i input.mp4 -ss ... -to ...`) with `-async 1`, `-avoid_negative_ts make_zero`, and 100% untouched raw audio quality (`-c:a copy`).
+  * 👤 **Unblocked Facecam**: Clean video output with zero top banner box blocking your facecam.
+
+* 🎮 **Two Dedicated Clip Triggers**:
+  1. ⚡ **Quick Short Trigger (20s–30s Replay)**:
+     - `story_cut: False` — Keeps 100% of your raw video footage (no LLM cuts), burns Spec v1 Karaoke subtitles, adds ending CTA, and uploads.
+     - Best for: Clutches, funny fails, single jumps, quick reactions.
+  2. 🎬 **Long Story Cut Trigger (90s–120s Replay)**:
+     - `story_cut: True` — Qwen 2.5 local AI model analyzes the transcript, finds the narrative arc (Hook ➔ Setup ➔ Climax), cuts filler dead air, and splices into a 25–40s Short.
+     - Best for: Multi-minute boss fights, complex puzzle builds, side quests.
+
+---
+
+## 🚀 Requirements
+
+- **Apple Silicon Mac** (MLX Whisper & Videotoolbox GPU acceleration).
+- **[Ollama](https://ollama.com)**: `ollama serve` running with `qwen2.5:latest` (or `llama3.2`).
+- Optional: OBS Studio, Aitum Nexus / Stream Deck / Hotkey triggers.
+
+---
+
+## 🛠️ Install
+
 ```bash
 git clone https://github.com/iammesutkaya/Clip-in-Context.git
 cd Clip-in-Context
 ./setup.sh
 ```
-`setup.sh` creates a venv, installs dependencies, registers an on-demand
-LaunchAgent, and builds a double-clickable **Clip in Context.app**. The Whisper
-model downloads automatically on first run.
 
-> **Don't put this in ~/Desktop, ~/Documents, or ~/Downloads.** macOS protects
-> those folders (TCC); a terminal without Files-and-Folders access can't write
-> there and setup fails with *"Operation not permitted"*. Clone it under your
-> home directory (e.g. `~/clip-in-context`) instead.
+`setup.sh` creates a `.venv`, installs dependencies, registers an on-demand LaunchAgent, and builds **Clip in Context.app**.
 
-## Use
-- **Start:** double-click **Clip in Context.app** (move it to /Applications or the
-  Dock). A waveform icon appears in the menu bar. Grant microphone access the
-  first time. It does **not** run at login — only when you launch it.
-- **Stop:** Quit from the menu bar.
-- **Dashboard:** menu bar → **Open Dashboard…** or `http://localhost:5001/` —
-  live captions, mic meter, trigger, recent clips, engine status, and settings.
+---
 
-### Dock it inside OBS
-The dashboard works great as an OBS **custom browser dock** (fully interactive,
-unlike a browser source): **OBS → Docks → Custom Browser Docks…** → name it
-"Clip in Context", URL `http://localhost:5001` → Apply. The trigger button, live
-captions, and recent clips now live right in your OBS window. The layout adapts
-to narrow dock widths.
+## 🎮 HTTP Endpoints (Stream Deck / Aitum / Hotkeys)
 
-### Design note
-One Python process, launched via launchd's GUI session, so it inherits
-microphone permission — **no signed `.app`, no Swift, no code signing, no macOS
-TCC silence** (the trap an earlier `.app` version fell into). Menu bar via
-`rumps`; dashboard served by the stdlib HTTP server (no web framework).
+All endpoints run on `http://localhost:5001`. Security validation enforces `Host: localhost` and blocks `cross-site` CSRF requests.
 
-## Trigger
-- Menu bar / dashboard **Trigger Clip Now**, or
-- HTTP (Stream Deck / Aitum): `GET http://localhost:5001/clip?duration=30&game=Valorant`
+| Endpoint | Method | Description |
+|---|---|---|
+| `/clip?duration=30&game=X` | `GET` | Transcribe speech buffer ➔ generate AI title ➔ push to clipboard & Aitum. |
+| `/edit?file=/path/to/clip.mp4&story_cut=false` | `GET` | **Quick Short Edit**: Renders full clip (no LLM cuts) with Spec v1 Karaoke subtitles & CTA card. |
+| `/edit?file=/path/to/clip.mp4&story_cut=true` | `GET` | **AI Story Cut**: Analyzes story arc with Qwen 2.5, cuts filler, and renders edited Short. |
+| `/name` | `GET` | Renames newest OBS video export to the generated AI title. |
+| `/upload` | `GET` | Automatically edits & uploads newest clip to YouTube Shorts. |
+| `/pause`, `/resume` | `GET` | Pause / resume audio recording buffer. |
+| `/quit` | `GET` | Stop the app. |
 
-### HTTP endpoints
-All are plain `GET`s on `http://localhost:5001`, so anything that can open a URL
-(Aitum webhook, Stream Deck, Shortcuts, `curl`) can drive the app.
+---
 
-| Endpoint | Does |
-|---|---|
-| `/clip?duration=30&game=X` | Transcribe the last N seconds → AI title → clipboard, notification, Aitum. Both params optional (`duration` defaults to your **Default Clip Length**). |
-| `/name` | Rename the newest video in the OBS clips folder to the last generated title (sanitized). OBS can't put the title in the filename — this does. |
-| `/upload` | Upload the newest clip to YouTube as a Short, using the last title. |
-| `/pause`, `/resume` | Stop / start feeding the audio buffer. |
-| `/quit` | Stop the app. |
+## 🧪 Tests & Audit
 
-### Wiring it to Aitum (recommended order)
-Add these as webhook actions in your clip sequence — the order matters, because
-`/name` and `/upload` act on the **exported file**:
-
-1. `/clip` — generates the title and pushes it to your Aitum `clip_title` variable.
-2. *your* "Create vertical clip" action — exports the `.mp4`.
-3. `/name` — renames that file to the AI title.
-4. `/upload` — *(optional)* publishes it to YouTube.
-
-### Global hotkey (native macOS, no extra permission)
-Bind any key with **Shortcuts.app** — no daemon, no Accessibility prompt:
-1. Shortcuts.app → new Shortcut → **Get Contents of URL** → `http://localhost:5001/clip?duration=30`.
-2. Shortcut Details → **Add Keyboard Shortcut** → pick your key (e.g. ⌃⌥C).
-
-Raycast / BetterTouchTool work too — anything that runs a URL on a hotkey.
-
-## Config
-Everything is editable from the dashboard (or the menu bar for mic / YouTube).
-Advanced fields live in `config.json`. Secrets (`config.json`,
-`client_secret.json`, `youtube_token.json`) are gitignored and never sent back
-to the browser.
-
-## Recent clips & errors
-The dashboard lists recent clips (persisted to `clips.jsonl`, **Clear all** to
-wipe) and shows a warning banner when something degrades — Whisper failed to
-load, Ollama unreachable, or a YouTube upload failed.
-
-## Tests
 ```bash
-./.venv/bin/python3 test_logic.py   # dedup, repetitive, RingBuffer edge cases
+./.venv/bin/python3 test_logic.py   # Unit test suite (RingBuffer, dedup, clip_editor PNG rendering)
 ```
 
-## Uninstall
-```bash
-launchctl unload -w ~/Library/LaunchAgents/com.clipincontext.app.plist
-rm ~/Library/LaunchAgents/com.clipincontext.app.plist
-```
-Then delete the folder and `Clip in Context.app`. Logs: `/tmp/clipincontext.log`.
+---
 
-## License
+## 📄 License
 MIT — see [LICENSE](LICENSE).

@@ -37,6 +37,10 @@ cat > "$PLIST" <<EOF
     <key>Label</key><string>$LABEL</string>
     <key>ProgramArguments</key>
     <array><string>$PY</string><string>$DIR/clip_in_context.py</string></array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>WorkingDirectory</key><string>$DIR</string>
     <key>RunAtLoad</key><false/>
     <key>KeepAlive</key><false/>

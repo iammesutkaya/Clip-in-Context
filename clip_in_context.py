@@ -12,8 +12,13 @@ no .app bundle, no code signing, and no TCC silence. Menu bar via rumps.
 Trigger: menu bar item, or HTTP  GET http://localhost:5001/clip?duration=30&game=Valorant
 Run:     python3 clip_in_context.py
 """
-import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html, queue
+import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html, queue, shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Ensure standard brew / local bin paths are in PATH (needed when running under launchd / GUI app)
+for _p in ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.homebrew/bin")]:
+    if _p not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = f"{_p}{os.pathsep}" + os.environ.get("PATH", "")
 
 # Line-buffer stdout/stderr so /tmp/clipincontext.log is live (launchd block-buffers
 # it otherwise, and every 📌/upload/error line sits in memory until the process exits).
@@ -31,7 +36,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(HERE, "config.json")
 TOKEN_FILE = os.path.join(HERE, "youtube_token.json")
 CLIENT_SECRET_FILE = os.path.join(HERE, "client_secret.json")
-YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+YOUTUBE_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl"
+]
 
 # ---------------- config (persisted to config.json) ----------------
 cfg = {
@@ -49,6 +57,14 @@ cfg = {
     "obs_clips_dir": "~/Movies",
     "enable_notif": True,
     "enable_clip": True,
+    "enable_auto_editor": True,          # run AI video editor (subtitles, hook banner, loudnorm) before upload
+    "smart_trim_silence": True,          # trim lead-in silence before first word
+    "sub_color": "yellow",               # yellow, green, cyan, red, gold
+    "sub_size": 64,                      # 48, 64, 76, 88
+    "sub_position": "lower_third",       # lower_third, center, top_third
+    "max_silence_gap_sec": 6.0,          # max gap in seconds to merge silence in story cuts
+    "preserve_story_span": True,         # preserve continuous video span for story arcs <= 45s
+    "segment_padding_sec": 0.5,          # pre/post padding around spoken segments
     "google_client_id": "",
     "google_client_secret": "",
 }
@@ -89,6 +105,7 @@ recording_paused = False
 mic_volume = 0.0
 live_text = ""                       # continuous live caption (title is clip-only)
 transcribe_lock = threading.Lock()   # MLX isn't reentrant; serialize live loop vs clip trigger
+clip_action_lock = threading.Lock()   # Serialize clip renaming and file operations to prevent race conditions
 whisper_ok = False                   # True once MLX has transcribed successfully
 whisper_err = False                  # True if the model failed to load
 ollama_ok = False                    # True while Ollama is reachable (health thread)
@@ -484,6 +501,19 @@ def youtube_creds():
             return None
     return creds if creds and creds.valid else None
 
+def youtube_auth_status():
+    """Quick check of YouTube auth state without blocking or throwing exceptions."""
+    if not os.path.exists(TOKEN_FILE):
+        return {"authenticated": False, "status": "Not Connected"}
+    try:
+        from google.oauth2.credentials import Credentials
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, YOUTUBE_SCOPES)
+        if creds and (creds.valid or (creds.expired and creds.refresh_token)):
+            return {"authenticated": True, "status": "Connected"}
+    except Exception:
+        pass
+    return {"authenticated": False, "status": "Needs Auth"}
+
 def youtube_service():
     from googleapiclient.discovery import build
     creds = youtube_creds()
@@ -532,6 +562,70 @@ def write_client_secret():
         "token_uri": "https://oauth2.googleapis.com/token",
         "redirect_uris": ["http://localhost"]}}, open(CLIENT_SECRET_FILE, "w"), indent=2)
 
+def get_auto_youtube_vod_url():
+    """Automatically fetches the streamer's active or newest live stream VOD URL directly from YouTube."""
+    stream_url = cfg.get("stream_url", "").strip()
+    if stream_url and "youtu" in stream_url and not stream_url.endswith("/live"):
+        return stream_url
+    
+    handle = cfg.get("youtube_handle") or cfg.get("streamer_name") or cfg.get("twitch_channel") or "mesutkaya"
+    handle = handle.lstrip("@")
+    target_url = f"https://www.youtube.com/@{handle}/live"
+    try:
+        req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
+        html = urllib.request.urlopen(req, timeout=3).read().decode("utf-8")
+        m = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+        if m:
+            return f"https://youtu.be/{m.group(1)}"
+    except Exception:
+        pass
+    return stream_url or f"https://youtube.com/@{handle}/live"
+
+GAME_HASHTAG_MAP = {
+    # Zelda Tears of the Kingdom mappings
+    "the legend of zelda: tears of the kingdom": ["#zelda", "#totk"],
+    "zelda: tears of the kingdom": ["#zelda", "#totk"],
+    "tears of the kingdom": ["#zelda", "#totk"],
+    "totk": ["#zelda", "#totk"],
+    # Zelda Breath of the Wild mappings
+    "the legend of zelda: breath of the wild": ["#zelda", "#botw"],
+    "zelda: breath of the wild": ["#zelda", "#botw"],
+    "breath of the wild": ["#zelda", "#botw"],
+    "botw": ["#zelda", "#botw"],
+    # General Zelda
+    "the legend of zelda": ["#zelda"],
+    "zelda": ["#zelda"],
+}
+
+def get_game_hashtags(g_name):
+    if not g_name:
+        return []
+    clean_name = g_name.strip()
+    lower = clean_name.lower()
+
+    # Check custom user config mapping if present (e.g. cfg["game_hashtags"])
+    custom_map = cfg.get("game_hashtags") or {}
+    for k, v in custom_map.items():
+        if k.lower() in lower or lower == k.lower():
+            return v if isinstance(v, list) else [v]
+
+    # Check known game mapping
+    if lower in GAME_HASHTAG_MAP:
+        return list(GAME_HASHTAG_MAP[lower])
+
+    # Smart substring matching for Zelda titles
+    if "zelda" in lower:
+        if any(w in lower for w in ("tears of the kingdom", "totk", "tears")):
+            return ["#zelda", "#totk"]
+        if any(w in lower for w in ("breath of the wild", "botw")):
+            return ["#zelda", "#botw"]
+        return ["#zelda"]
+
+    clean = re.sub(r'[^a-zA-Z0-9]', '', clean_name)
+    if clean and clean.lower() not in ("justchatting", "gaming"):
+        return [f"#{clean}"]
+    return []
+
 def _do_youtube_upload(path, title, raw, game):
     """Blocking upload of one clip. Throttled to max_upload_kbps so it yields
     uplink to the live Twitch/YouTube outputs (a stream already pushes ~12 Mbps;
@@ -546,32 +640,50 @@ def _do_youtube_upload(path, title, raw, game):
 
     # Build discoverable hashtags & title for YouTube Shorts algorithm
     g_name = game or cfg.get("default_game") or ""
-    clean_game = re.sub(r'[^a-zA-Z0-9]', '', g_name) if g_name else ""
+    game_tags = get_game_hashtags(g_name)
 
     # Hashtags to maximize reach & indexing in Shorts feed
     hashtags = ["#Shorts"]
-    if clean_game and clean_game.lower() not in ("justchatting", "gaming"):
-        hashtags.append(f"#{clean_game}")
+    hashtags.extend(game_tags)
     hashtags.extend(["#Gaming", "#TwitchClips", "#ShortsViral"])
 
     # Construct optimized YouTube title (Max 100 characters)
     base_title = title.strip()
     tag_suffix = " ".join([h for h in hashtags if h.lower() not in base_title.lower()])
-    yt_title = f"{base_title} {tag_suffix}".strip()[:100]
+    
+    # Fit as many whole hashtags as possible within 100 characters limit
+    if len(f"{base_title} {tag_suffix}".strip()) <= 100:
+        yt_title = f"{base_title} {tag_suffix}".strip()
+    else:
+        fitted = [base_title]
+        curr_len = len(base_title)
+        for h in tag_suffix.split():
+            if curr_len + 1 + len(h) <= 100:
+                fitted.append(h)
+                curr_len += 1 + len(h)
+        yt_title = " ".join(fitted).strip()[:100]
 
     # Video tags for YouTube search indexing
     tags_list = ["Shorts", "Gaming", "TwitchClips", "ViralShorts", "StreamHighlights"]
     if g_name:
         tags_list.insert(0, g_name)
         tags_list.append(f"{g_name} clips")
+    for gh in game_tags:
+        clean_tag = gh.lstrip("#")
+        if clean_tag.lower() not in [t.lower() for t in tags_list]:
+            tags_list.append(clean_tag)
     if cfg.get("streamer_name"):
         tags_list.append(cfg["streamer_name"])
 
     game_label = f" | {g_name}" if g_name else ""
+    stream_link = get_auto_youtube_vod_url()
+    stream_cta = f"📺 Watch Full Stream / VOD: {stream_link}\n" if stream_link else ""
+
     description = (
         f'{base_title}{game_label}\n\n'
         f'🎙️ "{raw}"\n\n'
-        f'Highlight by {cfg.get("streamer_name", "Streamer")}\n\n'
+        f'Highlight by {cfg.get("streamer_name", "Streamer")}\n'
+        f'{stream_cta}\n'
         f'{" ".join(hashtags)}'
     )
 
@@ -672,47 +784,82 @@ def rename_latest_to_title():
     """Rename the newest clip in the OBS folder to the last AI title. Returns the
     new path, or None. mtime is preserved so it stays 'newest' for /upload."""
     wait_for_title()
-    path = wait_for_fresh_clip()
-    if not path:
-        set_notice("No clip found in the OBS clips folder to rename")
-        return None
-    if not last_title:
-        set_notice("No title yet — trigger a clip first")
-        return None
-    d, ext = os.path.dirname(path), os.path.splitext(path)[1]
-    base = safe_filename(last_title)
-    new = os.path.join(d, base + ext)
-    n = 2
-    while os.path.exists(new) and os.path.abspath(new) != os.path.abspath(path):
-        new = os.path.join(d, f"{base} ({n}){ext}"); n += 1
-    if os.path.abspath(new) == os.path.abspath(path):
-        return path
+    with clip_action_lock:
+        path = wait_for_fresh_clip()
+        if not path:
+            set_notice("No clip found in the OBS clips folder to rename")
+            return None
+        if not last_title:
+            set_notice("No title yet — trigger a clip first")
+            return None
+        d, ext = os.path.dirname(path), os.path.splitext(path)[1]
+        base = safe_filename(last_title)
+        new = os.path.join(d, base + ext)
+        n = 2
+        while os.path.exists(new) and os.path.abspath(new) != os.path.abspath(path):
+            new = os.path.join(d, f"{base} ({n}){ext}"); n += 1
+        if os.path.abspath(new) == os.path.abspath(path):
+            return path
+        try:
+            os.rename(path, new)
+            set_notice(f"Renamed clip → {os.path.basename(new)}", "ok")
+            return new
+        except OSError as e:
+            set_notice(f"Rename failed: {e}")
+            return None
+
+
+def run_clip_editor_job(target_path, title=None, story_cut=True):
+    """Refactored helper: Runs clip_editor pipeline with unified config options."""
+    if not cfg.get("enable_auto_editor", True):
+        return target_path
     try:
-        os.rename(path, new)
-        set_notice(f"Renamed clip → {os.path.basename(new)}", "ok")
-        return new
-    except OSError as e:
-        set_notice(f"Rename failed: {e}")
-        return None
+        import clip_editor
+        set_notice(f"Editing clip {os.path.basename(target_path)}…", "work")
+        edited = clip_editor.process_and_edit_clip(
+            target_path,
+            title=title or last_title or "Stream Highlight",
+            model_repo=cfg.get("whisper_model", "mlx-community/whisper-large-v3-turbo"),
+            options={
+                "smart_trim": cfg.get("smart_trim_silence", True),
+                "story_cut": bool(story_cut),
+                "ollama_model": cfg.get("ollama_model", "qwen2.5:latest"),
+                "sub_color": cfg.get("sub_color", "yellow"),
+                "sub_size": cfg.get("sub_size", 64),
+                "sub_position": cfg.get("sub_position", "lower_third"),
+                "max_silence_gap_sec": cfg.get("max_silence_gap_sec", 6.0),
+                "preserve_story_span": cfg.get("preserve_story_span", True),
+                "segment_padding_sec": cfg.get("segment_padding_sec", 0.5),
+                "enable_cta": True,
+            }
+        )
+        if edited and os.path.exists(edited):
+            set_notice(f"Clip edited → {os.path.basename(edited)}", "ok")
+            return edited
+    except Exception as e:
+        print(f"⚠️ Clip editor error: {e}")
+        set_notice(f"Clip editing failed: {e}")
+    return target_path
 
 def do_upload():
-    """Upload the newest exported clip with the last generated title. Call this
-    AFTER the vertical clip is exported (e.g. an Aitum webhook after 'Create
-    vertical clip') so it isn't raced against clip creation."""
     global last_uploaded_path
     if not cfg["enable_yt"]:
-        set_notice("YouTube upload is off — enable it in Settings")
+        set_notice("YouTube uploads disabled in settings", "ok")
         return
-    wait_for_title()
-    path = wait_for_fresh_clip()
-    if not path:
-        set_notice("No clip found in the OBS clips folder to upload")
+    path = rename_latest_to_title() or wait_for_fresh_clip()
+    if not path or not os.path.exists(path):
+        set_notice("No clip available to upload", "err")
         return
     if path == last_uploaded_path:
         set_notice("Newest clip was already uploaded — skipping duplicate", "ok")
         return
+
+    upload_path = run_clip_editor_job(path)
+    if not upload_path or not os.path.exists(upload_path):
+        set_notice("Clip editing failed or file missing — aborting upload", "err")
+        return
     last_uploaded_path = path
-    upload_youtube_async(path, last_title or "Stream Highlight", last_raw, detected_game)
+    upload_youtube_async(upload_path, last_title or "Stream Highlight", last_raw, detected_game)
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
 PAGE = """<!DOCTYPE html><html lang="en"><head>
@@ -845,6 +992,7 @@ PAGE = """<!DOCTYPE html><html lang="en"><head>
         <div class="status-popover">
           <div class="pop-row"><span>MLX Whisper</span><span><b id="whDot" style="color:var(--warn)">●</b> <span id="whTxt" style="color:var(--txt)">loading…</span></span></div>
           <div class="pop-row"><span>Ollama LLM</span><span><b id="olDot" style="color:var(--warn)">●</b> <span id="olTxt" style="color:var(--txt)">down</span></span></div>
+          <div class="pop-row"><span>YouTube Auth</span><span><b id="ytDot" style="color:var(--warn)">●</b> <span id="ytTxt" style="color:var(--txt)">checking…</span></span></div>
         </div>
       </div>
       <button type="button" id="catBtn" class="chip-tw" onclick="refreshCategory()"
@@ -1004,6 +1152,8 @@ setInterval(async()=>{try{
   $('whDot').style.color=wCol;$('whTxt').textContent=wErr;
   const oCol=s.ollama?'var(--ok)':'#f87171',oTxt=s.ollama?'ready':'down';
   $('olDot').style.color=oCol;$('olTxt').textContent=oTxt;
+  const yCol=s.yt_authenticated?'var(--ok)':'#f87171',yTxt=s.yt_status||'Not Connected';
+  if($('ytDot'))$('ytDot').style.color=yCol;if($('ytTxt'))$('ytTxt').textContent=yTxt;
   {const n=$('notice');
    if(s.notice){
      // [border, bg, text, icon] per level: work=neutral blue, ok=green, warn=red
@@ -1056,13 +1206,18 @@ def apply_settings(data):
     global recording_paused, whisper_ok
     mic_changed = "mic_device" in data and str(data["mic_device"]) != cfg["mic_device"]
     whisper_changed = "whisper_model" in data and str(data["whisper_model"]) != cfg["whisper_model"]
-    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "whisper_model", "ollama_model", "yt_privacy", "obs_clips_dir"):
+    for k in ("streamer_name", "twitch_channel", "default_game", "mic_device", "whisper_model", "ollama_model", "yt_privacy", "obs_clips_dir", "sub_color", "sub_position"):
         if k in data:
             cfg[k] = str(data[k])
+    if "sub_size" in data:
+        try:
+            cfg["sub_size"] = int(data["sub_size"])
+        except (TypeError, ValueError):
+            pass
     if "custom_words" in data:
         raw = data["custom_words"] if isinstance(data["custom_words"], list) else str(data["custom_words"]).split(",")
         cfg["custom_words"] = [str(w).strip() for w in raw if str(w).strip()]
-    for k in ("enable_yt", "enable_notif", "enable_clip"):
+    for k in ("enable_yt", "enable_notif", "enable_clip", "enable_auto_editor", "smart_trim_silence"):
         if k in data:
             cfg[k] = bool(data[k])
     if "max_upload_kbps" in data:
@@ -1109,12 +1264,15 @@ def live_loop():
             pass
 
 def status_json():
+    yt_st = youtube_auth_status()
     return {
         "mic_volume": mic_volume,
         "paused": recording_paused,
         "whisper": whisper_ok,
         "whisper_err": whisper_err,
         "ollama": ollama_ok,
+        "yt_authenticated": yt_st["authenticated"],
+        "yt_status": yt_st["status"],
         "notice": notice if (time.time() - notice_ts < 30) else "",
         "notice_level": notice_level,
         "live": live_text,
@@ -1166,6 +1324,68 @@ def dashboard_html():
         page = page.replace(k, str(v))
     return page
 
+# ---------------- Speed Draw Showcase Event State ----------------
+_draw_showcase_state = {
+    "timestamp": 0,
+    "event": "showcase",
+    "number": 1,
+    "prompt": "",
+    "requester": "",
+    "image_path": ""
+}
+_draw_sse_queues = set()
+
+def broadcast_draw_event(event_dict):
+    payload = f"data: {json.dumps(event_dict)}\n\n".encode("utf-8")
+    for q in list(_draw_sse_queues):
+        try:
+            q.put_nowait(payload)
+        except Exception:
+            pass
+
+def notify_draw_showcase(number, prompt, requester, image_path):
+    global _draw_showcase_state
+    _draw_showcase_state = {
+        "timestamp": time.time(),
+        "event": "showcase",
+        "number": number,
+        "prompt": prompt,
+        "requester": requester,
+        "image_path": image_path,
+        "image_url": f"http://localhost:5001/draw/latest_image?t={int(time.time()*1000)}"
+    }
+    broadcast_draw_event(_draw_showcase_state)
+
+def get_aitum_drawing_state():
+    state_db = os.path.expanduser("~/.aitum/state.db")
+    data = {
+        "number": 1,
+        "prompt": "Freestyle Sketch",
+        "requester": "Stream Viewer",
+        "mtime": 0
+    }
+    if os.path.exists(state_db):
+        try:
+            data["mtime"] = os.path.getmtime(state_db)
+            with open(state_db, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip(): continue
+                    try:
+                        entry = json.loads(line)
+                        name = entry.get("name")
+                        val = entry.get("value")
+                        if name == "Drawing Request" and val:
+                            data["prompt"] = str(val)
+                        elif name == "Drawing Requester" and val:
+                            data["requester"] = str(val)
+                        elif name == "Drawing Request Number" and val is not None:
+                            data["number"] = int(val)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return data
+
 class Handler(BaseHTTPRequestHandler):
     def handle_one_request(self):
         # The dashboard polls every 150ms; a reload mid-response raises
@@ -1181,11 +1401,29 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, body, ctype="application/json", code=200):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
         self.wfile.write(body if isinstance(body, bytes) else body.encode())
 
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
+        # Security validation (Bug #5): Reject cross-site requests and non-localhost Host headers,
+        # but allow OAuth callback redirects from Google and local overlay endpoints under /draw/.
+        host = self.headers.get("Host", "").split(":")[0].lower()
+        sec_fetch = self.headers.get("Sec-Fetch-Site", "").lower()
+        if host not in ("localhost", "127.0.0.1") or (sec_fetch == "cross-site" and u.path != "/oauth2callback" and not u.path.startswith("/draw/")):
+            self._send(b'{"error": "forbidden (cross-site/invalid host)"}', "application/json", 403)
+            return
+
         q = urllib.parse.parse_qs(u.query)
         if u.path in ("/", "/dashboard"):
             self._send(dashboard_html(), "text/html; charset=utf-8")
@@ -1219,6 +1457,106 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/upload":
             threading.Thread(target=do_upload, daemon=True).start()
             self._send(b'{"status":"uploading"}')
+        elif u.path == "/draw/upload":
+            script_path = os.path.expanduser("~/OBS source/04_misc/04_scripts/draw_game.py")
+            subprocess.Popen([sys.executable, script_path, "upload"])
+            self._send(b'{"status":"uploading_drawing"}')
+        elif u.path == "/draw/countdown":
+            try:
+                sec = int(q.get("seconds", ["60"])[0])
+            except (ValueError, TypeError):
+                sec = 60
+            broadcast_draw_event({"event": "countdown", "seconds": sec})
+            self._send(json.dumps({"status": "countdown_started", "seconds": sec}).encode("utf-8"), "application/json")
+        elif u.path == "/draw/stop_countdown":
+            broadcast_draw_event({"event": "stop_countdown"})
+            self._send(b'{"status":"countdown_stopped"}', "application/json")
+        elif u.path == "/draw/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            client_queue = queue.Queue()
+            _draw_sse_queues.add(client_queue)
+            try:
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+                while True:
+                    try:
+                        msg = client_queue.get(timeout=20)
+                        self.wfile.write(msg)
+                        self.wfile.flush()
+                    except queue.Empty:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                _draw_sse_queues.discard(client_queue)
+            return
+        elif u.path == "/draw/latest_status":
+            self._send(json.dumps(_draw_showcase_state))
+        elif u.path == "/draw/latest_image":
+            img_path = _draw_showcase_state.get("image_path")
+            if not (img_path and os.path.exists(img_path)):
+                scr_dir = os.path.expanduser("~/OBS source/04_misc/03_screenshots")
+                pngs = [os.path.join(scr_dir, f) for f in os.listdir(scr_dir) if f.endswith(".png")]
+                img_path = max(pngs, key=os.path.getmtime) if pngs else None
+            if img_path and os.path.exists(img_path):
+                try:
+                    with open(img_path, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                except Exception as e:
+                    self._send(f'{{"error":"{e}"}}', "application/json", 500)
+                    return
+            self._send(b'{"error":"no image found"}', "application/json", 404)
+        elif u.path == "/draw/notify_showcase":
+            num = int(q.get("num", [1])[0])
+            prompt = q.get("prompt", ["Freestyle Sketch"])[0]
+            requester = q.get("requester", ["Stream Viewer"])[0]
+            path = q.get("path", [""])[0]
+            notify_draw_showcase(num, prompt, requester, path)
+            self._send(b'{"status":"notified"}')
+        elif u.path == "/draw/test_showcase":
+            scr_dir = os.path.expanduser("~/OBS source/04_misc/03_screenshots")
+            pngs = [os.path.join(scr_dir, f) for f in os.listdir(scr_dir) if f.endswith(".png")]
+            img_path = max(pngs, key=os.path.getmtime) if pngs else ""
+            notify_draw_showcase(5, "A test - the draw game works... I think", "MesutKaya", img_path)
+            self._send(b'{"status":"test_triggered"}')
+        elif u.path == "/draw/active":
+            st = get_aitum_drawing_state()
+            self._send(json.dumps(st).encode("utf-8"), "application/json")
+        elif u.path in ("/draw/dismiss", "/draw/peel", "/draw/hide", "/draw/clear"):
+            broadcast_draw_event({"event": "dismiss"})
+            self._send(b'{"status":"dismissed"}')
+        elif u.path in ("/draw/restore", "/draw/show"):
+            broadcast_draw_event({"event": "restore"})
+            self._send(b'{"status":"restored"}')
+        elif u.path == "/edit":
+            target_path = q.get("file", [""])[0] or wait_for_fresh_clip()
+            # Security path sandbox (Bug #6): Restrict /edit target file paths to clip directories
+            if target_path:
+                abs_target = os.path.abspath(os.path.expanduser(target_path))
+                allowed_dir = os.path.abspath(os.path.expanduser(cfg.get("obs_clips_dir", "~/Movies")))
+                user_obs_dir = os.path.abspath(os.path.expanduser("~/OBS recordings"))
+                if not (abs_target.startswith(allowed_dir) or abs_target.startswith(user_obs_dir)):
+                    self._send(b'{"error": "forbidden: target file outside allowed clips directory"}', "application/json", 403)
+                    return
+                if os.path.exists(abs_target):
+                    use_story = q.get("story_cut", ["true"])[0].lower() not in ("false", "0", "no")
+                    threading.Thread(target=lambda: run_clip_editor_job(abs_target, story_cut=use_story), daemon=True).start()
+                    self._send(json.dumps({"status": "editing", "file": abs_target, "story_cut": use_story}).encode())
+                    return
+            self._send(b'{"error": "file not found"}', "application/json", 404)
         elif u.path == "/name":
             threading.Thread(target=rename_latest_to_title, daemon=True).start()
             self._send(b'{"status":"renaming"}')
@@ -1263,6 +1601,7 @@ class ClipApp(rumps.App):
         self.title_item = rumps.MenuItem("Last Title: (none)")
         self.game_item = rumps.MenuItem("Category: (auto)")
         self.pause_item = rumps.MenuItem("Pause Recording", callback=self.toggle_pause)
+        self.yt_status_item = rumps.MenuItem("YouTube: Checking…", callback=self.auth_yt)
         self.yt_item = rumps.MenuItem(f"YouTube Auto-Upload: {'ON' if cfg['enable_yt'] else 'OFF'}", callback=self.toggle_yt)
         self.mic_menu = rumps.MenuItem("Microphone")
         self.mic_items = {}
@@ -1277,6 +1616,7 @@ class ClipApp(rumps.App):
             self.pause_item, None,
             self.title_item, self.game_item, None,
             self.mic_menu,
+            self.yt_status_item,
             self.yt_item,
             rumps.MenuItem("Set YouTube Credentials…", callback=self.set_creds),
             rumps.MenuItem("Authenticate YouTube…", callback=self.auth_yt), None,
@@ -1354,6 +1694,8 @@ class ClipApp(rumps.App):
         t = last_title if last_title else "(none)"
         self.title_item.title = f"Last Title: {t[:30]}"
         self.game_item.title = f"Category: {detected_game or '(auto)'}"
+        st = youtube_auth_status()
+        self.yt_status_item.title = f"YouTube: {'Connected ✅' if st['authenticated'] else 'Not Connected ⚠️'}"
 
 
 if __name__ == "__main__":
