@@ -110,9 +110,10 @@ def _set_aitum_var(key, value):
     requests.put(f"{AITUM_API}/state/{STATE_IDS[key]}", json={"value": value}, timeout=2)
 
 def start_flow():
-    """Run the Speed Draw flow in Aitum (rules are called "commands" in its API)."""
+    """Run the Speed Draw flow in Aitum. Its API lists rules at GET /aitum/rules
+    (name → id) and runs one at GET /aitum/rules/<id>; the docs' /commands is a 404."""
     try:
-        r = requests.get(f"{AITUM_API}/commands/{FLOW_RULE_ID}", timeout=3)
+        r = requests.get(f"{AITUM_API}/rules/{FLOW_RULE_ID}", timeout=3)
         if r.status_code == 200:
             return True
         notice(f"Aitum didn't start the draw flow (HTTP {r.status_code}) — run it from Aitum")
