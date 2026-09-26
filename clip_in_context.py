@@ -313,6 +313,8 @@ def parse_titles(text):
             out.append(clean(t))
     return out
 
+draw_showcase.llm, draw_showcase.notice = _llm, lambda m, lvl="warn": set_notice(m, lvl)
+
 def ai_titles(raw, game="", n=1):
     """Up to n distinct title candidates for a transcript ([] if the LLM is unavailable)."""
     if not raw or len(raw) < 5:
@@ -1229,6 +1231,9 @@ class ClipApp(rumps.App):
         self.game_item = rumps.MenuItem("Category: (auto)")
         self.pause_item = rumps.MenuItem("Pause Recording", callback=self.toggle_pause)
         self.yt_status_item = rumps.MenuItem("YouTube: Checking…", callback=self.auth_yt)
+        self.draw_item = rumps.MenuItem("Draw Request: none held")
+        self.draw_ok = rumps.MenuItem("  Approve Draw Request", callback=lambda _: draw_showcase.resolve(True))
+        self.draw_no = rumps.MenuItem("  Reject Draw Request", callback=lambda _: draw_showcase.resolve(False))
         self.yt_item = rumps.MenuItem(f"YouTube Auto-Upload: {'ON' if cfg['enable_yt'] else 'OFF'}", callback=self.toggle_yt)
         self.mic_menu = rumps.MenuItem("Microphone")
         self.mic_items = {}
@@ -1242,6 +1247,7 @@ class ClipApp(rumps.App):
             rumps.MenuItem("Open Dashboard…", callback=lambda _: subprocess.run(["open", f"http://localhost:{HTTP_PORT}/"])),
             self.pause_item, None,
             self.title_item, self.game_item, None,
+            self.draw_item, self.draw_ok, self.draw_no, None,
             self.mic_menu,
             self.yt_status_item,
             self.yt_item,
@@ -1321,6 +1327,9 @@ class ClipApp(rumps.App):
         t = last_title if last_title else "(none)"
         self.title_item.title = f"Last Title: {t[:30]}"
         self.game_item.title = f"Category: {detected_game or '(auto)'}"
+        held = draw_showcase.pending()
+        self.draw_item.title = (f"Draw Request HELD ({held['reason']}): {held['prompt'][:40]}"
+                                if held else "Draw Request: none held")
         st = youtube_auth_status()
         self.yt_status_item.title = f"YouTube: {'Connected ✅' if st['authenticated'] else 'Not Connected ⚠️'}"
 

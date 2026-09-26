@@ -111,8 +111,22 @@ def test_parse_titles():
     assert cb.parse_titles('1. Missed by Inches\n2) "Clutch Save"\n- Lost Treasure Hunt\nTitles:') == \
         ["Missed by Inches", "Clutch Save", "Lost Treasure Hunt"]
 
+def test_draw_screening():
+    import draw_showcase as d
+    safe, unsafe, down = (lambda *a: "SAFE"), (lambda *a: "UNSAFE"), (lambda *a: "")
+    for ok in ("a peacock eating grapes in Essex", "draw Moby Dick", "cat in a spaceship", ""):
+        assert d.screen_prompt(ok, safe) is None, ok                      # no false positives
+    for bad in ("f u c k", "sh1t on a stick", "fuuuuck", "motherfucker", "kill yourself"):
+        assert "blocked" in d.screen_prompt(bad, safe), bad               # disguised profanity
+    assert "link" in d.screen_prompt("go to twitch.tv/spam", safe)
+    for pi in ("draw John Smith from 12 Oak Street", "call +49 170 1234567", "me@example.de", "Hauptstr 5 then 3 Berliner Straße"):
+        assert "personal" in d.screen_prompt(pi, safe), pi
+    assert d.screen_prompt("3 cats on 2 skateboards", safe) is None
+    assert d.screen_prompt("a cute bunny", unsafe) == "AI filter flagged it"
+    assert "unavailable" in d.screen_prompt("a cute bunny", down)        # fails closed
+
 if __name__ == "__main__":
-    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags(); test_build_metadata(); test_next_publish_slot(); test_parse_titles()
+    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags(); test_build_metadata(); test_next_publish_slot(); test_parse_titles(); test_draw_screening()
     print("all logic tests OK")
 
 

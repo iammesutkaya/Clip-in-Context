@@ -76,6 +76,8 @@ All endpoints run on `http://localhost:5001`. Security validation enforces `Host
 | `/edit?file=/path/to/clip.mp4&story_cut=true` | `GET` | **AI Story Cut**: Analyzes story arc with Qwen 2.5, cuts filler, and renders edited Short. |
 | `/name` | `GET` | Renames newest OBS video export to the generated AI title. |
 | `/upload` | `GET` | Queues newest OBS export for review (or edits + uploads right away when review is off). |
+| `/draw/request` | `GET` | Speed Draw: screens the viewer's request (word list, links, personal info, local AI check). Clean → starts the Aitum flow; flagged → held. |
+| `/draw/approve`, `/draw/reject` | `GET` | Release or drop a held draw request (also in the menu bar). Rejected points are refunded in Twitch's reward queue. |
 | `/pause`, `/resume` | `GET` | Pause / resume audio recording buffer. |
 | `/quit` | `GET` | Stop the app. |
 
