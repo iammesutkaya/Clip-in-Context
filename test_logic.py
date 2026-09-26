@@ -125,8 +125,27 @@ def test_draw_screening():
     assert d.screen_prompt("a cute bunny", unsafe) == "AI filter flagged it"
     assert "unavailable" in d.screen_prompt("a cute bunny", down)        # fails closed
 
+def test_draw_only_approved_reach_overlays():
+    import draw_showcase as d
+    calls = []
+    orig = (d.llm, d.accept, d.subprocess.run, d.notice)
+    try:
+        d.llm = lambda p, n=25: "UNSAFE" if "bed" in p else "SAFE"
+        d.accept = lambda req: calls.append(req["prompt"])
+        d.subprocess.run = lambda *a, **k: None          # no macOS notification in tests
+        d.notice = lambda *a, **k: None
+        d._pending = None
+        d.handle_request("two people in bed", "Bad")
+        d.handle_request("a frog in a hat", "Nice")
+        assert calls == ["a frog in a hat"]                    # only the clean one went live
+        assert d.pending()["prompt"] == "two people in bed"    # held one still waiting
+        assert d.resolve(False) and d.pending() is None and calls == ["a frog in a hat"]
+    finally:
+        d.llm, d.accept, d.subprocess.run, d.notice = orig
+        d._pending = None
+
 if __name__ == "__main__":
-    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags(); test_build_metadata(); test_next_publish_slot(); test_parse_titles(); test_draw_screening()
+    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags(); test_build_metadata(); test_next_publish_slot(); test_parse_titles(); test_draw_screening(); test_draw_only_approved_reach_overlays()
     print("all logic tests OK")
 
 

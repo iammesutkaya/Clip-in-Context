@@ -21,6 +21,8 @@ DRAW_SCRIPT = os.path.expanduser("~/OBS source/04_misc/04_scripts/draw_game.py")
 AITUM_STATE_DB = os.path.expanduser("~/.aitum/state.db")
 AITUM_API = "http://localhost:7777/aitum"
 FLOW_RULE_ID = "9vQv94t7VJPs06El"   # Aitum rule "Speed Draw - 60s Flow"
+# Aitum global variables the flow reads (TTS, OBS text, screenshot file name).
+STATE_IDS = {"prompt": "ZxEU6grJ9BqfYiF1", "requester": "fvPCK9poni8q1OlO", "number": "5LlJzC7jkquvSC27"}
 
 # Set by clip_in_context at import time (avoids a circular import).
 llm = lambda prompt, max_tokens=25: ""      # → completion text, "" when no model is reachable
@@ -79,21 +81,33 @@ def screen_prompt(text, ask=None):
     return "AI filter flagged it" if v.startswith("UNSAFE") else "filter unavailable (Ollama down)"
 
 _pending = None   # {"prompt", "requester", "reason"} awaiting approval, or None
+_current = None   # last APPROVED request {"prompt", "requester", "number"} — all the overlays ever see
 
 def pending():
     return _pending
 
-def _live_request():
-    """Prompt/requester as Aitum holds them right now (its API), else from state.db."""
+def current():
+    global _current
+    if _current is None:   # first call after a restart: last request Aitum saved
+        _current = aitum_drawing_state()
+        _current.pop("mtime", None)
+    return _current
+
+def _aitum_vars():
+    """Aitum's live variables by name (its API), else what it last saved to state.db."""
     try:
         data = requests.get(f"{AITUM_API}/state", timeout=2).json().get("data", [])
         vals = {v.get("name"): v.get("value") for v in data}
         if "Drawing Request" in vals:
-            return str(vals["Drawing Request"] or ""), str(vals.get("Drawing Requester") or "")
+            return {"prompt": str(vals["Drawing Request"] or ""), "requester": str(vals.get("Drawing Requester") or ""),
+                    "number": int(vals.get("Drawing Request Number") or 0)}
     except Exception:
         pass
     st = aitum_drawing_state()
-    return st["prompt"], st["requester"]
+    return {"prompt": st["prompt"], "requester": st["requester"], "number": st["number"]}
+
+def _set_aitum_var(key, value):
+    requests.put(f"{AITUM_API}/state/{STATE_IDS[key]}", json={"value": value}, timeout=2)
 
 def start_flow():
     """Run the Speed Draw flow in Aitum (rules are called "commands" in its API)."""
@@ -106,17 +120,33 @@ def start_flow():
         notice(f"Couldn't reach Aitum to start the draw flow: {e}")
     return False
 
+def accept(req):
+    """A request passed (or was approved): number it, write it back into Aitum — a newer
+    redemption may have overwritten the variables while this one was held — show it on
+    the overlays, and start the flow. Numbering here means rejected requests leave no gaps."""
+    global _current
+    num = _aitum_vars()["number"] + 1
+    try:
+        for key, value in (("prompt", req["prompt"]), ("requester", req["requester"]), ("number", num)):
+            _set_aitum_var(key, value)
+    except Exception as e:
+        notice(f"Couldn't update Aitum's draw variables: {e}")
+    _current = {"prompt": req["prompt"], "requester": req["requester"], "number": num}
+    broadcast({"event": "request", **_current})
+    start_flow()
+
 def handle_request(prompt=None, requester=None):
     global _pending
     if prompt is None:
         time.sleep(0.5)   # let Aitum finish writing the variables its rule just set
-        prompt, requester = _live_request()
+        v = _aitum_vars()
+        prompt, requester = v["prompt"], v["requester"]
+    req = {"prompt": prompt, "requester": requester or ""}
     reason = screen_prompt(prompt)
     if reason is None:
-        _pending = None
-        start_flow()
+        accept(req)   # leaves any other held request alone
         return
-    _pending = {"prompt": prompt, "requester": requester or "", "reason": reason}
+    _pending = {**req, "reason": reason}
     notice(f"Draw request from {requester or 'a viewer'} held: {reason} — Approve/Reject in the menu bar")
     subprocess.run(["osascript", "-e", 'display notification "Held for review — Approve or Reject '
                     'from the menu bar" with title "🎨 Draw request" sound name "Submarine"'],
@@ -129,7 +159,7 @@ def resolve(approve):
         return False
     held, _pending = _pending, None
     if approve:
-        start_flow()
+        accept(held)
     else:
         notice(f"Rejected draw request from {held['requester'] or 'a viewer'} — refund it in Twitch's reward queue", "ok")
     return True
@@ -248,7 +278,7 @@ def handle(h, path, q):
     elif path == "/draw/latest_image":
         _image(h)
     elif path == "/draw/active":
-        h._send(json.dumps(aitum_drawing_state()))
+        h._send(json.dumps(current()))   # approved requests only — never raw redemption text
     elif path == "/draw/request":
         # Aitum's redemption rule calls this; ?prompt= lets you test screening by hand.
         pr = q.get("prompt", [None])[0]
