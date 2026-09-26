@@ -22,7 +22,18 @@ mic → rolling audio buffer → (trigger) → MLX Whisper → Qwen 2.5 AI Title
   * ✂️ **Smart Spoken Pause & Punctuation Chunking**: Automatically breaks text into new lines on natural pauses (`gap > 0.40s`) and sentence punctuation (`. ! ? ,`).
   * 📣 **Ending Creator CTA Cards**: Static `"LIVE MOST NIGHTS"` + `"follow for more!"` cards rendered in the final 2 seconds with speech captions automatically clearing out.
   * 🔒 **Sample-Accurate A/V Sync & Untouched Audio**: Input-first frame decoding seeking (`-i input.mp4 -ss ... -to ...`) with `-async 1`, `-avoid_negative_ts make_zero`, and 100% untouched raw audio quality (`-c:a copy`).
-  * 👤 **Unblocked Facecam**: Clean video output with zero top banner box blocking your facecam.
+  * 🪝 **Hook Banner**: The title sits at the top for the first ~4.5s so scrollers know what's happening (`show_banner` in `config.json` to turn off).
+
+* 📤 **Review Queue & Scheduled Publishing** (dashboard → Queue tab):
+  * `/upload` during the stream only *records* the clip — no GPU editing or uplink use while live.
+  * After the stream, **✨ Suggest titles** transcribes each exported clip (mic + game audio) and offers 3 title candidates. Pick or edit, then **Approve** or **Skip**.
+  * Approved clips are edited with the final title and uploaded one at a time, scheduled to go public at the next free **Publish Time** (default 12:00 / 15:00 / 18:00 / 21:00).
+  * The YouTube API allows ~6 uploads/day. Clips over the limit stay queued and retry after the midnight-Pacific reset; failures show a Retry button. Everything persists in `uploads.json`.
+  * View counts refresh every 30 min; your best-performing titles become style examples for new ones.
+  * Each uploaded Short links to YouTube Studio so you can set its **Related video** (the one clickable link a Short gets) — tick *done* when set.
+  * Turn **Review Clips Before Upload** off in Settings → YouTube to edit and publish straight away, as before.
+
+* #️⃣ **Game Hashtags**: `game_hashtags` in `config.json` maps Twitch categories (substring, longest match wins) to hashtags; unknown games get `#GameName`.
 
 * 🎮 **Two Dedicated Clip Triggers**:
   1. ⚡ **Quick Short Trigger (20s–30s Replay)**:
@@ -64,7 +75,7 @@ All endpoints run on `http://localhost:5001`. Security validation enforces `Host
 | `/edit?file=/path/to/clip.mp4&story_cut=false` | `GET` | **Quick Short Edit**: Renders full clip (no LLM cuts) with Spec v1 Karaoke subtitles & CTA card. |
 | `/edit?file=/path/to/clip.mp4&story_cut=true` | `GET` | **AI Story Cut**: Analyzes story arc with Qwen 2.5, cuts filler, and renders edited Short. |
 | `/name` | `GET` | Renames newest OBS video export to the generated AI title. |
-| `/upload` | `GET` | Automatically edits & uploads newest clip to YouTube Shorts. |
+| `/upload` | `GET` | Queues newest OBS export for review (or edits + uploads right away when review is off). |
 | `/pause`, `/resume` | `GET` | Pause / resume audio recording buffer. |
 | `/quit` | `GET` | Stop the app. |
 
@@ -73,7 +84,7 @@ All endpoints run on `http://localhost:5001`. Security validation enforces `Host
 ## 🧪 Tests & Audit
 
 ```bash
-./.venv/bin/python3 test_logic.py   # Unit test suite (RingBuffer, dedup, clip_editor PNG rendering)
+./.venv/bin/python3 test_logic.py   # Self-checks: transcript cleanup, ring buffer, metadata, scheduling, security sandboxes
 ```
 
 ---

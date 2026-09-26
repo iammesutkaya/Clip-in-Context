@@ -85,8 +85,34 @@ def test_game_hashtags():
     assert cb.get_game_hashtags("Just Chatting") == []
     assert cb.get_game_hashtags("") == []
 
+def test_build_metadata():
+    orig = cb.cfg.get("streamer_name")
+    try:
+        cb.cfg["streamer_name"] = "Mesut"
+        title, tags, desc = cb.build_metadata("Missed by Inches", "oh shit no", "Tears of the Kingdom")
+        assert title == "Missed by Inches #Shorts #zelda #totk #Gaming #TwitchClips #ShortsViral"
+        assert tags[0] == "Tears of the Kingdom" and "totk" in tags and tags[-1] == "Mesut"
+        assert '"oh s*** no"' in desc                                  # transcript is censored
+        long_title, _, _ = cb.build_metadata("x" * 90, "", "")
+        assert len(long_title) <= 100 and long_title.endswith("#Shorts")   # whole hashtags only
+    finally:
+        cb.cfg["streamer_name"] = orig
+
+def test_next_publish_slot():
+    from datetime import datetime
+    now = datetime(2026, 9, 26, 14, 50).astimezone()
+    s = cb.next_publish_slot(["12:00", "15:00", "18:00"], set(), now)
+    assert (s.day, s.hour) == (26, 18)                        # 15:00 is <30 min away
+    taken = {s.isoformat()}
+    s2 = cb.next_publish_slot(["12:00", "15:00", "18:00"], taken, now)
+    assert (s2.day, s2.hour) == (27, 12)                      # next free slot rolls to tomorrow
+
+def test_parse_titles():
+    assert cb.parse_titles('1. Missed by Inches\n2) "Clutch Save"\n- Lost Treasure Hunt\nTitles:') == \
+        ["Missed by Inches", "Clutch Save", "Lost Treasure Hunt"]
+
 if __name__ == "__main__":
-    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags()
+    test_dedup(); test_strip_lead_junk(); test_repetitive(); test_ringbuffer(); test_clip_editor(); test_find_latest_skips_editor_output(); test_draw_image_path_sandbox(); test_game_hashtags(); test_build_metadata(); test_next_publish_slot(); test_parse_titles()
     print("all logic tests OK")
 
 

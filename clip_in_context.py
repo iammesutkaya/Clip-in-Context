@@ -13,6 +13,8 @@ Trigger: menu bar item, or HTTP  GET http://localhost:5001/clip?duration=30&game
 Run:     python3 clip_in_context.py
 """
 import os, re, sys, json, math, time, threading, subprocess, urllib.parse, html, queue, shutil
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Ensure standard brew / local bin paths are in PATH (needed when running under launchd / GUI app)
@@ -70,6 +72,14 @@ cfg = {
     "segment_padding_sec": 0.5,          # pre/post padding around spoken segments
     "google_client_id": "",
     "google_client_secret": "",
+    "review_uploads": True,              # /upload queues clips for review; off = edit + publish right away
+    "publish_slots": ["12:00", "15:00", "18:00", "21:00"],   # local times approved Shorts go public
+    # Twitch category (substring, case-insensitive; longest match wins) → hashtags
+    "game_hashtags": {
+        "tears of the kingdom": ["#zelda", "#totk"], "totk": ["#zelda", "#totk"],
+        "breath of the wild": ["#zelda", "#botw"], "botw": ["#zelda", "#botw"],
+        "zelda": ["#zelda"],
+    },
 }
 
 def load_config():
@@ -273,49 +283,65 @@ def clean(text):
         text = re.sub(p, r, text, flags=re.IGNORECASE)
     return text
 
-def ai_title(raw, game=""):
-    if not raw or len(raw) < 5:
-        return None
-    prompt = (
-        f'A streamer playing {game or "a game"} just said this during a highlight moment on stream:\n"{raw}"\n\n'
-        "Write ONE short YouTube Shorts title (max 8 words) that makes someone scrolling past stop and watch.\n"
-        "- Describe the situation or stakes (clutch win, fail, surprise, close call), not a word-for-word quote.\n"
-        "- Infer only from the words above. Do NOT invent characters, bosses, names, or events that weren't implied.\n"
-        "- Ignore filler, grunts, and stray words that don't fit the sentence.\n"
-        "- Family-friendly. No quotes, no hashtags, no emoji, no ending period.\n"
-        "Title:")
-    # Ollama
+def _llm(prompt, max_tokens=25):
+    """Ollama first, OpenAI fallback. Returns the raw completion or ''."""
     try:
-        r = requests.post("http://localhost:11434/api/generate", timeout=6, json={
-            "model": cfg["ollama_model"], "prompt": prompt, "stream": False, "options": {"temperature": 0.4}})
+        r = requests.post("http://localhost:11434/api/generate", timeout=8, json={
+            "model": cfg["ollama_model"], "prompt": prompt, "stream": False, "options": {"temperature": 0.5}})
         if r.status_code == 200:
-            t = r.json().get("response", "").strip().strip('"\'')
-            if t and len(t) <= MAX_TITLE_LENGTH:
-                return clean(t)
+            return r.json().get("response", "")
     except Exception:
         pass
-    # OpenAI fallback
     key = os.getenv("OPENAI_API_KEY")
     if key:
         try:
-            r = requests.post("https://api.openai.com/v1/chat/completions", timeout=6,
+            r = requests.post("https://api.openai.com/v1/chat/completions", timeout=8,
                 headers={"Authorization": f"Bearer {key}"},
-                json={"model": "gpt-4o-mini", "temperature": 0.4, "max_tokens": 25,
+                json={"model": "gpt-4o-mini", "temperature": 0.5, "max_tokens": max_tokens,
                       "messages": [{"role": "user", "content": prompt}]})
             if r.status_code == 200:
-                t = r.json()["choices"][0]["message"]["content"].strip().strip('"\'')
-                if t and len(t) <= MAX_TITLE_LENGTH:
-                    return clean(t)
+                return r.json()["choices"][0]["message"]["content"]
         except Exception:
             pass
-    return None
+    return ""
+
+def parse_titles(text):
+    """LLM output → clean title lines (drops numbering, bullets, quotes, over-long lines)."""
+    out = []
+    for line in text.splitlines():
+        t = re.sub(r"^\s*(?:\d+[.)]|[-*•])\s*", "", line).strip().strip('"\'').strip()
+        if t and len(t) <= MAX_TITLE_LENGTH and not t.lower().startswith(("title", "here")):
+            out.append(clean(t))
+    return out
+
+def ai_titles(raw, game="", n=1):
+    """Up to n distinct title candidates for a transcript ([] if the LLM is unavailable)."""
+    if not raw or len(raw) < 5:
+        return []
+    best = top_titles()
+    style = ("Titles that did well on this channel (match the style, not the content):\n"
+             + "\n".join(f"- {t}" for t in best) + "\n\n") if best else ""
+    ask = "ONE short YouTube Shorts title" if n == 1 else f"{n} different short YouTube Shorts titles, one per line"
+    prompt = (
+        f'A streamer playing {game or "a game"} just said this during a highlight moment on stream:\n"{raw}"\n\n'
+        + style +
+        f"Write {ask} (max 8 words each) that make someone scrolling past stop and watch.\n"
+        "- Describe the situation or stakes (clutch win, fail, surprise, close call), not a word-for-word quote.\n"
+        "- Infer only from the words above. Do NOT invent characters, bosses, names, or events that weren't implied.\n"
+        "- Ignore filler, grunts, and stray words that don't fit the sentence.\n"
+        "- Family-friendly. No quotes, no hashtags, no emoji, no ending period, no numbering.\n"
+        + ("Title:" if n == 1 else "Titles:"))
+    return list(dict.fromkeys(parse_titles(_llm(prompt, 25 * n))))[:n]
+
+def ai_title(raw, game=""):
+    t = ai_titles(raw, game, 1)
+    return t[0] if t else None
 
 # ---------------- transcribe + orchestrate ----------------
 last_title = ""
 last_raw = ""
 title_pending = False    # True while a /clip is transcribing, so /name and /upload wait for it
 last_trigger_ts = 0.0    # time.time() when the last /clip started; /name & /upload wait for a clip newer than this
-last_uploaded_path = None  # dedup guard so the same file never uploads twice
 
 def repetitive(text):
     """True if the transcript is a hallucinated loop (few unique words repeated)."""
@@ -577,121 +603,61 @@ def write_client_secret():
         "token_uri": "https://oauth2.googleapis.com/token",
         "redirect_uris": ["http://localhost"]}}, open(CLIENT_SECRET_FILE, "w"), indent=2)
 
-GAME_HASHTAG_MAP = {
-    # Zelda Tears of the Kingdom mappings
-    "the legend of zelda: tears of the kingdom": ["#zelda", "#totk"],
-    "zelda: tears of the kingdom": ["#zelda", "#totk"],
-    "tears of the kingdom": ["#zelda", "#totk"],
-    "totk": ["#zelda", "#totk"],
-    # Zelda Breath of the Wild mappings
-    "the legend of zelda: breath of the wild": ["#zelda", "#botw"],
-    "zelda: breath of the wild": ["#zelda", "#botw"],
-    "breath of the wild": ["#zelda", "#botw"],
-    "botw": ["#zelda", "#botw"],
-    # General Zelda
-    "the legend of zelda": ["#zelda"],
-    "zelda": ["#zelda"],
-}
-
 def get_game_hashtags(g_name):
-    if not g_name:
+    lower = (g_name or "").strip().lower()
+    if not lower:
         return []
-    clean_name = g_name.strip()
-    lower = clean_name.lower()
+    # Longest key first so "tears of the kingdom" beats plain "zelda".
+    for k in sorted(cfg.get("game_hashtags") or {}, key=len, reverse=True):
+        if k.lower() in lower:
+            v = cfg["game_hashtags"][k]
+            return list(v) if isinstance(v, list) else [v]
+    tag = re.sub(r"[^a-zA-Z0-9]", "", g_name)
+    return [f"#{tag}"] if tag and tag.lower() not in ("justchatting", "gaming") else []
 
-    # Check custom user config mapping if present (e.g. cfg["game_hashtags"])
-    custom_map = cfg.get("game_hashtags") or {}
-    for k, v in custom_map.items():
-        if k.lower() in lower or lower == k.lower():
-            return v if isinstance(v, list) else [v]
+def build_metadata(title, raw, game):
+    """YouTube snippet for a Short: (title ≤100 chars with hashtags, tags, description)."""
+    game_tags = get_game_hashtags(game)
+    hashtags = ["#Shorts", *game_tags, "#Gaming", "#TwitchClips", "#ShortsViral"]
+    base = title.strip()
+    yt_title = base
+    for h in hashtags:                       # whole hashtags only, as many as fit in 100
+        if h.lower() not in base.lower() and len(yt_title) + 1 + len(h) <= 100:
+            yt_title += " " + h
+    yt_title = yt_title[:100]
 
-    # Check known game mapping
-    if lower in GAME_HASHTAG_MAP:
-        return list(GAME_HASHTAG_MAP[lower])
-
-    # Smart substring matching for Zelda titles
-    if "zelda" in lower:
-        if any(w in lower for w in ("tears of the kingdom", "totk", "tears")):
-            return ["#zelda", "#totk"]
-        if any(w in lower for w in ("breath of the wild", "botw")):
-            return ["#zelda", "#botw"]
-        return ["#zelda"]
-
-    clean = re.sub(r'[^a-zA-Z0-9]', '', clean_name)
-    if clean and clean.lower() not in ("justchatting", "gaming"):
-        return [f"#{clean}"]
-    return []
-
-def _do_youtube_upload(path, title, raw, game):
-    """Blocking upload of one clip. Throttled to max_upload_kbps so it yields
-    uplink to the live Twitch/YouTube outputs (a stream already pushes ~12 Mbps;
-    an unthrottled upload starves it → the live 'bitrate' drops)."""
-    if not path or not os.path.exists(path):
-        return
-    svc = youtube_service()
-    if not svc:
-        set_notice("YouTube not authenticated — click Authenticate in the YouTube tab")
-        return
-    from googleapiclient.http import MediaFileUpload
-
-    # Build discoverable hashtags & title for YouTube Shorts algorithm
-    g_name = game or cfg.get("default_game") or ""
-    game_tags = get_game_hashtags(g_name)
-
-    # Hashtags to maximize reach & indexing in Shorts feed
-    hashtags = ["#Shorts"]
-    hashtags.extend(game_tags)
-    hashtags.extend(["#Gaming", "#TwitchClips", "#ShortsViral"])
-
-    # Construct optimized YouTube title (Max 100 characters)
-    base_title = title.strip()
-    tag_suffix = " ".join([h for h in hashtags if h.lower() not in base_title.lower()])
-    
-    # Fit as many whole hashtags as possible within 100 characters limit
-    if len(f"{base_title} {tag_suffix}".strip()) <= 100:
-        yt_title = f"{base_title} {tag_suffix}".strip()
-    else:
-        fitted = [base_title]
-        curr_len = len(base_title)
-        for h in tag_suffix.split():
-            if curr_len + 1 + len(h) <= 100:
-                fitted.append(h)
-                curr_len += 1 + len(h)
-        yt_title = " ".join(fitted).strip()[:100]
-
-    # Video tags for YouTube search indexing
-    tags_list = ["Shorts", "Gaming", "TwitchClips", "ViralShorts", "StreamHighlights"]
-    if g_name:
-        tags_list.insert(0, g_name)
-        tags_list.append(f"{g_name} clips")
-    for gh in game_tags:
-        clean_tag = gh.lstrip("#")
-        if clean_tag.lower() not in [t.lower() for t in tags_list]:
-            tags_list.append(clean_tag)
+    tags = ([game] if game else []) + ["Shorts", "Gaming", "TwitchClips", "ViralShorts", "StreamHighlights"]
+    if game:
+        tags.append(f"{game} clips")
+    for h in game_tags:
+        if h.lstrip("#").lower() not in (t.lower() for t in tags):
+            tags.append(h.lstrip("#"))
     if cfg.get("streamer_name"):
-        tags_list.append(cfg["streamer_name"])
-
-    game_label = f" | {g_name}" if g_name else ""
+        tags.append(cfg["streamer_name"])
 
     description = (
-        f'{base_title}{game_label}\n\n'
+        f'{base}{f" | {game}" if game else ""}\n\n'
         f'🎙️ "{clean(raw)}"\n\n'
-        f'Highlight by {cfg.get("streamer_name", "Streamer")}\n\n'
+        f'Highlight by {cfg.get("streamer_name") or "Streamer"}\n\n'
         f'{" ".join(hashtags)}'
     )
+    return yt_title, tags, description
 
-    body = {
-        "snippet": {
-            "title": yt_title,
-            "description": description,
-            "tags": tags_list,
-            "categoryId": "20"  # 20 = Gaming category
-        },
-        "status": {
-            "privacyStatus": cfg.get("yt_privacy", "public"),
-            "selfDeclaredMadeForKids": False
-        }
-    }
+def _do_youtube_upload(path, title, raw, game, publish_at=None):
+    """Blocking upload of one clip; returns the video id. publish_at (aware datetime)
+    uploads it private and lets YouTube make it public then. Throttled to
+    max_upload_kbps so it yields uplink to a live stream (~12 Mbps outbound)."""
+    svc = youtube_service()
+    if not svc:
+        raise RuntimeError("YouTube not authenticated — click Authenticate in the YouTube tab")
+    from googleapiclient.http import MediaFileUpload
+    yt_title, tags, description = build_metadata(title, raw, game or cfg.get("default_game") or "")
+    status = {"privacyStatus": cfg.get("yt_privacy", "public"), "selfDeclaredMadeForKids": False}
+    if publish_at:
+        status.update(privacyStatus="private", publishAt=publish_at.isoformat())
+    body = {"snippet": {"title": yt_title, "description": description, "tags": tags,
+                        "categoryId": "20"},   # 20 = Gaming
+            "status": status}
     chunk = 1024 * 1024
     req = svc.videos().insert(part="snippet,status", body=body,
                               media_body=MediaFileUpload(path, chunksize=chunk, resumable=True))
@@ -700,42 +666,175 @@ def _do_youtube_upload(path, title, raw, game):
     set_notice(f"Uploading {os.path.basename(path)} to YouTube…", "work")
     while resp is None:
         t0 = time.time()
-        status, resp = req.next_chunk()
+        _, resp = req.next_chunk()
         wait = chunk / (cfg["max_upload_kbps"] * 1024) - (time.time() - t0)
         if wait > 0:
             time.sleep(wait)
     url = f"https://youtu.be/{resp['id']}"
-    print(f"✅ {url}")
-    set_notice(f"Uploaded to YouTube: {url}", "ok")
+    when = f" — goes public {publish_at:%a %H:%M}" if publish_at else ""
+    print(f"✅ {url}{when}")
+    set_notice(f"Uploaded to YouTube: {url}{when}", "ok")
+    return resp["id"]
 
-# One serialized worker: uploads go out live during the stream, but ONE at a time.
-# Concurrent uploads (a thread per clip) multiplied uplink pressure and starved
-# the live outputs — clips after the first stalled/failed. The queue fixes that.
+# ---------------- clip records: review queue → edit → scheduled upload ----------------
+# One record per exported clip, persisted so a restart, crash, or the daily quota
+# never loses a clip. status: pending (awaiting review) → approved (queued) →
+# processing → scheduled/uploaded, or skipped / failed (retry from the dashboard).
+RECORDS_FILE = os.path.join(HERE, "uploads.json")
+_rec_lock = threading.Lock()
+try:
+    with open(RECORDS_FILE, encoding="utf-8") as _f:
+        records = json.load(_f)
+except (OSError, ValueError):
+    records = []
+
+def save_records():
+    with _rec_lock:
+        tmp = RECORDS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=1, ensure_ascii=False)
+        os.replace(tmp, RECORDS_FILE)   # atomic: a crash mid-write can't truncate the queue
+
+def get_record(rid):
+    return next((r for r in records if r["id"] == rid), None)
+
+def top_titles(n=5):
+    """Best-performing uploaded titles (by views) — few-shot style examples for new titles."""
+    seen = sorted((r for r in records if r.get("views")), key=lambda r: r["views"], reverse=True)
+    return [r["title"] for r in seen[:n]] if len(seen) >= 3 else []
+
+def next_publish_slot(slots, taken, now):
+    """First configured local HH:MM slot ≥30 min from now that no record already holds."""
+    earliest = now + timedelta(minutes=30)
+    for day in range(60):
+        d = (now + timedelta(days=day)).date()
+        for hm in sorted(slots):
+            h, m = map(int, hm.split(":"))
+            t = datetime(d.year, d.month, d.day, h, m).astimezone()
+            if t >= earliest and t.isoformat() not in taken:
+                return t
+    return None
+
+def next_quota_reset():
+    """YouTube Data API quota resets at midnight Pacific; retry a few minutes after."""
+    pt = datetime.now(ZoneInfo("America/Los_Angeles"))
+    return (pt + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0).timestamp()
+
+QUOTA_ERRORS = ("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded")
 _upload_q = queue.Queue()
+_queued = set()   # record ids waiting in _upload_q, so the retry loop never double-queues
 
+def enqueue(rec):
+    if rec["id"] not in _queued:
+        _queued.add(rec["id"])
+        _upload_q.put(rec["id"])
+
+def process_record(rec):
+    """Edit (captions, banner with the reviewed title) then upload. The edited file is
+    kept on the record, so a quota retry tomorrow doesn't re-render it."""
+    rec.update(status="processing", error="")
+    save_records()
+    if not (rec.get("edited_path") and os.path.exists(rec["edited_path"])):
+        rec["edited_path"] = run_clip_editor_job(rec["path"], title=rec["title"])
+        save_records()
+    publish_at = None
+    if cfg.get("review_uploads", True):
+        publish_at = next_publish_slot(cfg["publish_slots"], {r.get("publish_at") for r in records},
+                                       datetime.now().astimezone())
+    rec["yt_id"] = _do_youtube_upload(rec["edited_path"], rec["title"], rec["raw"], rec["game"], publish_at)
+    rec.update(status="scheduled" if publish_at else "uploaded",
+               publish_at=publish_at.isoformat() if publish_at else None, uploaded_at=time.time())
+    save_records()
+
+# One serialized worker: uploads go out ONE at a time. Concurrent uploads
+# multiplied uplink pressure and starved the live stream outputs.
 def _upload_worker():
     while True:
-        path, title, raw, game = _upload_q.get()
+        rid = _upload_q.get()
+        _queued.discard(rid)
+        rec = get_record(rid)
         try:
-            _do_youtube_upload(path, title, raw, game)
+            if rec and rec["status"] == "approved":
+                process_record(rec)
         except Exception as e:
             msg = str(e)
             print(f"❌ upload failed: {e}")
-            if any(k in msg for k in ("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded")):
-                # YouTube Data API: 10,000 units/day, an upload costs 1,600 → ~6/day.
-                set_notice("Daily YouTube upload limit reached (~6/day). Resets ~midnight Pacific, or request a quota increase.")
+            if any(k in msg for k in QUOTA_ERRORS):
+                # 10,000 units/day, an upload costs 1,600 → ~6/day. Stays approved; retried after reset.
+                rec.update(status="approved", retry_after=next_quota_reset(), error="Daily upload limit — retrying after reset")
+                set_notice("Daily YouTube upload limit reached (~6/day). Queued clips retry after midnight Pacific.")
             else:
+                rec.update(status="failed", error=msg[:300])
                 set_notice(f"YouTube upload failed: {e}")
+            save_records()
         finally:
             _upload_q.task_done()
 
-threading.Thread(target=_upload_worker, daemon=True).start()
+def retry_loop():
+    """Re-queue approved clips (after a restart, or once the quota has reset)."""
+    for r in records:
+        if r["status"] == "processing":   # interrupted mid-upload by a restart
+            r["status"] = "approved"
+    while True:
+        for r in records:
+            if r["status"] == "approved" and (r.get("retry_after") or 0) <= time.time():
+                enqueue(r)
+        time.sleep(300)
 
-def upload_youtube_async(path, title, raw, game):
-    _upload_q.put((path, title, raw, game))
-    waiting = _upload_q.qsize()
-    if waiting > 1:   # something is already uploading; this one is behind it
-        set_notice(f"Queued for YouTube upload — {waiting} waiting…", "work")
+def stats_loop():
+    """Pull view counts for uploaded Shorts every 30 min (1 quota unit per 50 videos)."""
+    while True:
+        time.sleep(60)
+        ids = [r["yt_id"] for r in records if r.get("yt_id")][-200:]
+        svc = youtube_service() if ids else None
+        if svc:
+            try:
+                views = {}
+                for i in range(0, len(ids), 50):
+                    res = svc.videos().list(part="statistics", id=",".join(ids[i:i + 50])).execute()
+                    views.update({v["id"]: int(v["statistics"].get("viewCount", 0)) for v in res.get("items", [])})
+                for r in records:
+                    if r.get("yt_id") in views:
+                        r["views"] = views[r["yt_id"]]
+                save_records()
+            except Exception as e:
+                print(f"⚠️ stats: {e}")
+        time.sleep(1800 - 60)
+
+def suggest_titles():
+    """For pending clips: transcribe the exported clip itself (game + mic audio, the
+    real cut) and offer 3 title candidates. Run after the stream — it uses the GPU."""
+    for r in [r for r in records if r["status"] == "pending" and not r.get("candidates")]:
+        if not os.path.exists(r["path"]):
+            continue
+        set_notice(f"Suggesting titles for {os.path.basename(r['path'])}…", "work")
+        try:
+            text = clip_editor.transcribe_words(r["path"], cfg["whisper_model"])["text"]
+            text = strip_lead_junk(dedup(" ".join(text.split())))
+            if text:
+                r["raw"] = text
+            r["candidates"] = ai_titles(r["raw"], r["game"], 3)
+            save_records()
+        except Exception as e:
+            print(f"⚠️ suggest: {e}")
+    set_notice("Title suggestions ready", "ok")
+
+def update_record(data):
+    """Dashboard edits: title, status (approve / skip / back to pending / retry), related-video tick."""
+    r = get_record(str(data.get("id", "")))
+    if not r:
+        raise ValueError("unknown clip")
+    if "title" in data and str(data["title"]).strip():
+        r["title"] = clean(str(data["title"]).strip())[:MAX_TITLE_LENGTH * 2]
+    if "related" in data:
+        r["related"] = bool(data["related"])
+    st = data.get("status")
+    if st in ("approved", "skipped", "pending") and r["status"] in ("pending", "skipped", "failed", "approved"):
+        r.update(status=st, retry_after=None, error="")
+        if st == "approved":
+            enqueue(r)
+    save_records()
+    return r
 
 def safe_filename(name):
     name = re.sub(r'[/:\\?%*|"<>\x00-\x1f]', "-", name).strip(" .-")
@@ -836,367 +935,33 @@ def run_clip_editor_job(target_path, title=None, story_cut=True):
     return target_path
 
 def do_upload():
-    global last_uploaded_path
+    """Aitum webhook after OBS exports the vertical clip: record it for review
+    (default) or, with review off, edit + publish right away."""
     if not cfg["enable_yt"]:
         set_notice("YouTube uploads disabled in settings", "ok")
         return
     path = rename_latest_to_title() or wait_for_fresh_clip()
-    # Snapshot now: editing takes ~a minute, and a new /clip in that window
-    # would otherwise hand this upload the NEXT clip's title/transcript.
-    title, raw, game = last_title or "Stream Highlight", last_raw, detected_game
     if not path or not os.path.exists(path):
         set_notice("No clip available to upload", "err")
         return
-    if path == last_uploaded_path:
-        set_notice("Newest clip was already uploaded — skipping duplicate", "ok")
+    if any(r["path"] == path for r in records):
+        set_notice("Newest clip is already queued — skipping duplicate", "ok")
         return
-
-    upload_path = run_clip_editor_job(path, title=title)
-    if not upload_path or not os.path.exists(upload_path):
-        set_notice("Clip editing failed or file missing — aborting upload", "err")
-        return
-    last_uploaded_path = path
-    upload_youtube_async(upload_path, title, raw, game)
+    # Snapshot now: a later /clip must not relabel this one.
+    rec = {"id": str(int(time.time() * 1000)), "created": time.time(), "path": path,
+           "title": last_title or "Stream Highlight", "raw": last_raw, "game": detected_game,
+           "candidates": [], "status": "pending"}
+    records.append(rec)
+    if cfg.get("review_uploads", True):
+        save_records()
+        n = sum(r["status"] == "pending" for r in records)
+        set_notice(f"Clip queued for review ({n} waiting) — approve in the dashboard Queue tab", "ok")
+    else:
+        rec["status"] = "approved"
+        save_records()
+        enqueue(rec)
 
 # ---------------- HTTP trigger (stdlib, for Stream Deck / hotkey / Aitum) ----------------
-PAGE = """<!DOCTYPE html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Clip in Context</title>
-<style>
-  :root{--bg:#111319;--card:#181b24;--card-border:#262b3a;--txt:#f1f5f9;--dim:#94a3b8;
-    --accent:#8b5cf6;--accent2:#ec4899;--blue:#38bdf8;--ok:#10b981;--warn:#fbbf24;--err:#f87171;--radius:12px;
-    --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")}
-  *{box-sizing:border-box}
-  html{background:var(--bg)}
-  body{margin:0;min-height:100vh;background:var(--bg);color:var(--txt);
-    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:12px 10px}
-  .wrap{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
-  .card{background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);padding:12px 14px}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  h1{font-size:14px;font-weight:700;margin:0;display:flex;align-items:center;gap:8px}
-  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:#064e3b;color:#34d399}
-  .pill.off{background:#451a1d;color:#f87171}
-  .status-badges{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);font-weight:600}
-  .lbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
-  .vu{height:5px;border-radius:3px;background:#0d0f14;border:1px solid var(--card-border);overflow:hidden;flex:1}
-  .vu>i{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,#10b981,#f59e0b,#ef4444);transition:width .08s linear}
-  
-  /* Standardized Harmonious Heights (40px Controls & Output Boxes) */
-  .control-h, input, select, .go{height:40px;box-sizing:border-box}
-  .title-box{height:40px;font-size:14px;font-weight:700;color:var(--blue);background:#0d0f14;border:1px solid var(--card-border);
-    border-radius:8px;padding:0 6px 0 12px;word-break:break-word;display:flex;justify-content:space-between;align-items:center;gap:8px}
-  .title-box span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  /* Title picks up the Trigger button's gradient (solid accent as fallback). */
-  #ttl{color:var(--accent);background:linear-gradient(135deg,var(--accent),var(--accent2));
-    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-  /* Fixed height so the layout never jumps, but multi-line so captions stay
-     readable. Integer line-height + exact N-line heights (border-box: 16px
-     padding + 2px borders) clip on a whole line — no half-line slivers.
-     Deliberately not -webkit-line-clamp: it needs display:-webkit-box, which
-     some engines normalise away, leaving it inert. */
-  .scriptbox{font-style:italic;color:var(--dim);background:#0d0f14;border:1px solid var(--card-border);
-    border-radius:8px;padding:8px 12px 0;margin-top:6px;font-size:13px;line-height:19px;
-    overflow:hidden;height:48px}                    /* 2 lines: 2*19 + 8 top pad + 2 border */
-  #cap{font-style:normal;color:var(--txt);height:67px}   /* 3 lines */
-  .metarow{display:flex;justify-content:space-between;align-items:center;margin-top:6px;
-    padding:6px 12px;font-size:12px;color:var(--dim)}
-  /* Settings tabs: one panel at a time in a stable frame — switching tabs
-     doesn't shift the sections around the way expanding accordions did. */
-  .tabs{display:flex;gap:4px;margin:2px 0 12px;background:#0d0f14;
-    border:1px solid var(--card-border);border-radius:9px;padding:3px}
-  .tab{flex:1;padding:7px 2px;font-size:10px;font-weight:700;letter-spacing:.03em;
-    text-transform:uppercase;color:var(--dim);background:none;border:none;border-radius:6px;
-    cursor:pointer;transition:background .15s,color .15s;white-space:nowrap}
-  .tab:hover{color:var(--txt)}
-  .tab.on{background:#222a38;color:var(--txt)}
-  /* Never set display inline on a panel — an inline style beats .tabpanel{display:none}
-     and the panel would show even when inactive. Use .stack for column layout. */
-  .tabpanel{display:none}
-  .tabpanel.on{display:block}
-  .tabpanel.stack.on{display:flex;flex-direction:column;gap:10px}
-  /* Min-height keeps the frame (and the Save button) roughly put when switching
-     tabs. Panels are 56-352px naturally; 200 balances stability against dead
-     space on the short ones. */
-  .tabwrap{min-height:200px}
-  
-  button{font:inherit;cursor:pointer;border:none;border-radius:8px;color:#fff;font-weight:700;transition:all 0.15s ease}
-  .go{width:100%;padding:0 16px;font-size:14px;line-height:40px;background:linear-gradient(135deg,var(--accent),var(--accent2));
-    box-shadow:0 3px 10px rgba(139,92,246,.25);display:flex;align-items:center;justify-content:center}
-  .go:hover{opacity:0.95}
-  .go:active{transform:translateY(1px)}
-  .mini{background:#252a38;height:28px;line-height:28px;padding:0 10px;font-size:11px;border-radius:6px;color:var(--txt);display:inline-flex;align-items:center}
-  .mini:hover{background:#31374a}
-  .save{width:100%;height:40px;line-height:40px;font-size:13px;background:linear-gradient(135deg,#6366f1,#3b82f6);margin-top:20px}
-  label{font-size:11px;color:var(--dim);font-weight:600;display:block;margin:10px 0 4px}
-  input,select{width:100%;background:#0d0f14;border:1px solid #2d3345;border-radius:8px;
-    color:var(--txt);padding:0 10px;font:inherit;line-height:38px}
-  select{appearance:none;-webkit-appearance:none;padding-right:28px;
-    background-image:var(--chev);background-repeat:no-repeat;background-position:right 10px center;background-size:12px}
-  input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
-  .flex{display:flex;gap:8px}.flex>div{flex:1}
-  .chk{display:flex;align-items:center;justify-content:space-between;margin:8px 0}
-  .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(80px);
-    background:#064e3b;color:#34d399;border:1px solid #047857;padding:8px 16px;border-radius:8px;
-    font-weight:700;transition:transform .2s;opacity:0;z-index:99}
-  .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
-  .cat{color:var(--blue);font-weight:700}
-  /* Status Hover Popover */
-  .status-hover-wrap{position:relative;display:inline-flex;align-items:center}
-  .status-popover{display:none;position:absolute;top:calc(100% + 6px);left:0;
-    background:#181b24;border:1px solid #262b3a;border-radius:10px;padding:10px 12px;
-    width:210px;box-shadow:0 10px 25px rgba(0,0,0,0.5);z-index:100;font-size:11px;color:var(--dim);
-    flex-direction:column;gap:6px}
-  .status-hover-wrap:hover .status-popover{display:flex}
-  .pop-row{display:flex;justify-content:space-between;align-items:center}
-  .pop-row span:last-child{font-weight:600;color:var(--txt)}
-  /* Live Twitch category, click to re-check */
-  .chip-tw{display:inline-flex;align-items:center;gap:5px;max-width:170px;
-    font:inherit;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;
-    background:rgba(145,70,255,.16);color:#bf94ff;border:none;cursor:pointer;
-    transition:background .15s}
-  .chip-tw:hover{background:rgba(145,70,255,.28)}
-  .chip-tw:disabled{opacity:.5;cursor:default}
-  .chip-tw span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  /* Recent clips list */
-  .cliprow{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:8px;
-    cursor:pointer;transition:background .12s}
-  .cliprow:hover{background:#151a24}
-  .cliprow .t{flex:1;min-width:0;color:var(--txt);font-weight:600;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .cliprow:hover .t{color:var(--blue)}
-  .cliprow .ts{flex:none;color:var(--dim);font-size:11px;font-variant-numeric:tabular-nums}
-  /* flex:1 (not height:100%) so it fills the reserved list area and centres in it */
-  .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    gap:4px;color:var(--dim);text-align:center}
-  .empty b{font-size:13px;font-weight:600;color:#7c8798}
-  .empty span{font-size:11px;opacity:.75}
-  /* Secondary action button (e.g. manual upload) */
-  .btn2{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
-    height:38px;margin-top:14px;font:inherit;font-size:13px;font-weight:600;
-    color:var(--txt);background:#1a2130;border:1px solid #2b3446;border-radius:9px;
-    cursor:pointer;transition:background .15s,border-color .15s}
-  .btn2:hover{background:#212a3c;border-color:#3a465c}
-  .btn2:disabled{opacity:.55;cursor:default}
-  .btn2 svg{flex:none;opacity:.85}
-</style></head><body><div class="wrap">
-
-  <!-- UNIFIED HEADER & HOVER STATUS BAR -->
-  <div class="row" style="padding:2px 4px;font-size:11px">
-    <div style="display:flex;align-items:center;gap:8px">
-      <img src="/icon.png" style="width:20px;height:20px;border-radius:5px;object-fit:cover" alt="App Icon" title="Clip in Context">
-      <div class="status-hover-wrap">
-        <span id="live" class="pill" style="cursor:pointer">● Ready ▾</span>
-        <div class="status-popover">
-          <div class="pop-row"><span>MLX Whisper</span><span><b id="whDot" style="color:var(--warn)">●</b> <span id="whTxt" style="color:var(--txt)">loading…</span></span></div>
-          <div class="pop-row"><span>Ollama LLM</span><span><b id="olDot" style="color:var(--warn)">●</b> <span id="olTxt" style="color:var(--txt)">down</span></span></div>
-          <div class="pop-row"><span>YouTube Auth</span><span><b id="ytDot" style="color:var(--warn)">●</b> <span id="ytTxt" style="color:var(--txt)">checking…</span></span></div>
-        </div>
-      </div>
-      <button type="button" id="catBtn" class="chip-tw" onclick="refreshCategory()"
-              title="Live Twitch category — click to re-check">
-        <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="flex:none" aria-label="Twitch"><path d="M4.265 3 3 6.236v13.06h4.463V22h2.529l2.532-2.704h3.66L21 14.677V3H4.265zm1.686 1.685h13.365v9.135l-2.953 2.95h-4.464l-2.529 2.7v-2.7H5.951V4.685zm4.633 8.014h1.686V7.632h-1.686v5.067zm4.62 0h1.686V7.632h-1.686v5.067z"/></svg>
-        <span id="cat">auto</span>
-      </button>
-    </div>
-    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
-      <button id="pauseBtn" class="mini" onclick="togglePause()">Pause</button>
-      <button class="mini" style="background:#451a1d;color:#fca5a5" onclick="quitApp(this)">Quit</button>
-    </div>
-  </div>
-
-  <div id="notice" class="card" style="display:none;border-color:#7c2d12;background:#2a1206;color:#fca5a5;padding:8px 12px;font-size:12px;align-items:center;justify-content:space-between;gap:8px;flex-direction:row">
-    <span id="noticeMsg"></span>
-    <button class="mini" style="background:#4a1d1d;color:#fca5a5" onclick="$('notice').style.display='none'">Dismiss</button>
-  </div>
-
-  <!-- CORE ACTION PANEL -->
-  <div class="card" style="display:flex;flex-direction:column;gap:10px">
-
-    <div class="tabs" role="tablist">
-      <button type="button" class="tab on" data-tab="0">💬 Live</button>
-      <button type="button" class="tab" data-tab="1">🕒 Recent Clips</button>
-    </div>
-
-    <div class="tabpanel stack on" data-panel="0">
-
-    <!-- LIVE CAPTIONS (the tab label already says "Live"; mic meter is in the header) -->
-    <div class="scriptbox" id="cap" style="margin-top:0">Listening…</div>
-
-    <!-- TRIGGER BUTTON (100% FULL WIDTH) -->
-    <div class="row" style="margin:2px 0">
-      <button class="go" style="margin:0;width:100%" onclick="trigger()" id="gobtn">✂️ Trigger Clip Now</button>
-    </div>
-
-    <!-- LATEST TITLE OUTPUT -->
-    <div>
-      <div class="lbl" style="margin-bottom:4px">📌 Generated Clip Title</div>
-      <div class="title-box"><span id="ttl">No clip generated yet</span><button class="mini" onclick="copyTitle()">Copy</button></div>
-      <div class="scriptbox" id="script">Trigger a clip after you speak.</div>
-    </div>
-
-    </div><!-- /live panel -->
-
-    <div class="tabpanel" data-panel="1">
-      <div id="clearWrap" style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="mini" onclick="clearHistory(this)">Clear all</button></div>
-      <!-- min-height matches the Live panel so the card doesn't resize between tabs -->
-      <div id="history" style="display:flex;flex-direction:column;gap:2px;font-size:12px;min-height:209px">No clips yet.</div>
-    </div>
-
-  </div>
-
-  <!-- SETTINGS -->
-  <div class="card">
-    <form onsubmit="save(event)">
-      <div class="tabs" role="tablist">
-        <button type="button" class="tab on" data-tab="0">🎙️ Stream</button>
-        <button type="button" class="tab" data-tab="1">🧠 AI</button>
-        <button type="button" class="tab" data-tab="2">🚀 YouTube</button>
-      </div>
-      <div class="tabwrap">
-      <div class="tabpanel on" data-panel="0">
-      <label>Microphone Input Device</label>
-      <div style="position:relative">
-        <select id="mic_device" style="padding-left:24px">__MIC_OPTS__</select>
-        <div title="Mic Level" style="position:absolute;left:9px;top:0;bottom:0;margin:auto 0;width:6px;height:18px;background:#1b2230;border-radius:3px;overflow:hidden;display:flex;align-items:flex-end">
-          <i id="vu2" style="display:block;width:100%;height:0;background:linear-gradient(0deg,#10b981,#f59e0b,#ef4444);transition:height .08s linear"></i>
-        </div>
-      </div>
-      <div class="flex"><div><label>Streamer Name</label><input id="streamer_name" value="__STREAMER__"></div>
-        <div><label>Twitch Channel</label><input id="twitch_channel" value="__TWITCH__"></div></div>
-      <div class="flex">
-        <div><label>Default Clip Length</label><select id="default_duration">__DUR_OPTS__</select></div>
-        <div><label>Default Game Fallback</label><input id="default_game" value="__GAME__"></div>
-      </div>
-
-      <div class="chk" style="margin-top:14px"><label style="margin:0">Desktop Notifications</label><input type="checkbox" id="enable_notif" __NOTIF__></div>
-      <div class="chk"><label style="margin:0">Auto-Copy Title to Clipboard</label><input type="checkbox" id="enable_clip" __CLIP__></div>
-      </div>
-      <div class="tabpanel" data-panel="1">
-      <label>Transcription (MLX Whisper)</label><select id="whisper_model">__WHISPER_OPTS__</select>
-      <label>Title Generation (Ollama)</label><select id="ollama_model">__MODEL_OPTS__</select>
-      <label>Custom Words / Jargon (comma separated)</label><input id="custom_words" value="__WORDS__">
-
-      </div>
-      <div class="tabpanel" data-panel="2">
-      <label>Google OAuth Client ID</label><input id="google_client_id" value="__CID__" placeholder="xxxx.apps.googleusercontent.com">
-      <label>Google OAuth Client Secret</label><input type="password" id="google_client_secret" value="" placeholder="__SEC_PH__" autocomplete="off">
-      <div class="flex"><div><label>Privacy</label><select id="yt_privacy">
-        <option value="public" __PUB__>Public</option><option value="unlisted" __UNL__>Unlisted</option><option value="private" __PRV__>Private</option></select></div>
-        <div><label>Upload Limit (KB/s)</label><input id="max_upload_kbps" value="__KBPS__"></div></div>
-      <label>OBS Clips Directory</label><input id="obs_clips_dir" value="__OBS__">
-      <button type="button" class="btn2" style="margin-top:16px" onclick="fetch('/auth')">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg>
-        <span>Authenticate YouTube</span>
-      </button>
-      <div class="chk" style="margin-top:16px"><label style="margin:0">Enable Auto-Upload</label><input type="checkbox" id="enable_yt" __YT__></div>
-      <button type="button" id="upBtn" class="btn2" onclick="uploadLatest(this)">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-        <span>Upload Latest Clip</span>
-      </button>
-
-      </div>
-      </div>
-      <button class="save" type="submit">💾 Save Settings</button>
-    </form>
-  </div>
-</div>
-<div id="toast" class="toast">Saved</div>
-<script>
-const $=id=>document.getElementById(id);
-// Exclusive accordions: opening one closes its siblings, so the dock never
-// grows past one open section. Closing Settings also resets its sub-sections.
-// Tabs. Each .tabs bar only drives panels that are its own siblings (or inside a
-// sibling .tabwrap), so the main card's tabs and the Settings tabs stay independent.
-document.querySelectorAll('.tabs').forEach(bar=>{
-  const scope=bar.parentElement;
-  const panels=()=>[...scope.children].flatMap(c=>
-    c.classList.contains('tabpanel')?[c]:(c.classList.contains('tabwrap')?[...c.children]:[]));
-  bar.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
-    const i=t.dataset.tab;
-    bar.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
-    panels().forEach(p=>p.classList.toggle('on',p.dataset.panel===i));
-    if(i==='1'&&scope.querySelector('#history'))loadHistory();}));});
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-async function clearHistory(btn){
-  if(!btn.dataset.armed){btn.dataset.armed='1';btn.textContent='Confirm?';setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Clear all';}},2500);return;}
-  delete btn.dataset.armed;btn.textContent='Clear all';
-  await fetch('/api/history/clear',{method:'POST'});loadHistory();
-}
-async function loadHistory(){try{const h=await(await fetch('/api/history')).json();
-  $('history').innerHTML = h.length
-    ? h.map(c=>`<div class="cliprow" title="Click to copy" data-title="${esc(c.title)}"><span class="t">${esc(c.title)}</span><span class="ts">${new Date(c.t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('')
-    : '<div class="empty"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="opacity:.45;margin-bottom:2px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><b>No clips yet</b><span>Trigger a clip and it will show up here</span></div>';
-  $('clearWrap').style.visibility = h.length ? 'visible' : 'hidden';   // nothing to clear when empty
-  $('history').querySelectorAll('.cliprow').forEach(r=>r.addEventListener('click',()=>{
-    navigator.clipboard.writeText(r.dataset.title); toast('Copied');}));
-}catch(e){}}
-loadHistory();
-let paused=false;
-function togglePause(){fetch(paused?'/resume':'/pause');}
-function quitApp(btn){
-  if(btn.dataset.armed){fetch('/quit');document.body.innerHTML='<p style=\"text-align:center;margin-top:60px;color:#94a3b8\">Clip in Context stopped. You can close this tab.</p>';return;}
-  btn.dataset.armed='1';btn.textContent='Confirm?';
-  setTimeout(()=>{if(btn.dataset.armed){delete btn.dataset.armed;btn.textContent='Quit';}},2500);
-}
-setInterval(async()=>{try{
-  const s=await(await fetch('/api/status')).json();
-  const nf=0.0003,v=s.mic_volume||0;
-  let p=v>nf?Math.min(100,Math.max(4,Math.round(Math.log10(v/nf)*40))):0;
-  {const vu=$('vu');if(vu)vu.style.width=p+'%';const v2=$('vu2');if(v2)v2.style.height=p+'%';}
-  $('cat').textContent=s.category||'auto';
-  if(s.live)$('cap').textContent=s.live;
-  const wErr=s.whisper_err?'error':(s.whisper?'ready':'loading…'),wCol=s.whisper_err?'#f87171':(s.whisper?'var(--ok)':'#fbbf24');
-  $('whDot').style.color=wCol;$('whTxt').textContent=wErr;
-  const oCol=s.ollama?'var(--ok)':'#f87171',oTxt=s.ollama?'ready':'down';
-  $('olDot').style.color=oCol;$('olTxt').textContent=oTxt;
-  const yCol=s.yt_authenticated?'var(--ok)':'#f87171',yTxt=s.yt_status||'Not Connected';
-  if($('ytDot'))$('ytDot').style.color=yCol;if($('ytTxt'))$('ytTxt').textContent=yTxt;
-  {const n=$('notice');
-   if(s.notice){
-     // [border, bg, text, icon] per level: work=neutral blue, ok=green, warn=red
-     const c=s.notice_level==='work'?['#1e3a5f','#0c1a2e','#93c5fd','⏳ ']
-            :s.notice_level==='ok'  ?['#14503b','#0e2a20','#6ee7b7','✅ ']
-            :                         ['#7c2d12','#2a1206','#fca5a5','⚠ '];
-     n.style.borderColor=c[0];n.style.background=c[1];n.style.color=c[2];
-     $('noticeMsg').textContent=c[3]+s.notice;
-     if(n.dataset.msg!==s.notice){n.dataset.msg=s.notice;n.style.display='flex';}   // re-show only on a new message
-   }else{n.style.display='none';delete n.dataset.msg;}}                             // server cleared it → hide
-  const l=$('live');
-  if(s.paused){l.textContent='⏸ Paused ▾';l.classList.add('off');}
-  else if(s.whisper_err||!s.whisper||!s.ollama){l.textContent='● Degraded ▾';l.classList.remove('off');}
-  else{l.textContent='● Ready ▾';l.classList.remove('off');}
-  paused=s.paused;$('pauseBtn').textContent=paused?'Resume':'Pause';
-  if(s.last_title){$('ttl').textContent=s.last_title;}
-  if(s.last_raw){$('script').textContent='"'+s.last_raw+'"';}
-}catch(e){}},150);
-async function trigger(){const b=$('gobtn');b.textContent='⏳ Processing…';b.disabled=true;
-  try{const d=await(await fetch('/clip?json=1')).json();
-    if(d.title)$('ttl').textContent=d.title;if(d.raw_transcript)$('script').textContent='"'+d.raw_transcript+'"';loadHistory();}catch(e){}
-  b.textContent='✂️ Trigger Clip Now';b.disabled=false;}
-async function uploadLatest(b){const label=b.querySelector('span'),was=label.textContent;
-  b.disabled=true;label.textContent='Uploading…';                 // result arrives as a banner
-  try{await fetch('/upload');}catch(e){}
-  setTimeout(()=>{b.disabled=false;label.textContent=was;},2000);}
-async function refreshCategory(){const b=$('catBtn');b.disabled=true;   // .chip-tw:disabled dims it
-  try{const d=await(await fetch('/category')).json();if(d.category)$('cat').textContent=d.category;}catch(e){}
-  b.disabled=false;}
-function copyTitle(){const t=$('ttl').textContent.trim();
-  if(!t||t==='No clip generated yet'){toast('No title yet');return;}
-  navigator.clipboard.writeText(t);toast('Copied');}
-function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
-async function save(ev){ev.preventDefault();
-  const b={streamer_name:$('streamer_name').value,twitch_channel:$('twitch_channel').value,
-    mic_device:$('mic_device').value,default_game:$('default_game').value,
-    default_duration:parseInt($('default_duration').value)||30,
-    whisper_model:$('whisper_model').value,ollama_model:$('ollama_model').value,
-    custom_words:$('custom_words').value.split(',').map(s=>s.trim()).filter(Boolean),
-    enable_yt:$('enable_yt').checked,google_client_id:$('google_client_id').value,
-    google_client_secret:$('google_client_secret').value,yt_privacy:$('yt_privacy').value,
-    max_upload_kbps:parseInt($('max_upload_kbps').value)||800,obs_clips_dir:$('obs_clips_dir').value,
-    enable_notif:$('enable_notif').checked,enable_clip:$('enable_clip').checked};
-  const r=await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
-  toast(r.ok?'Saved':'Error');if(r.ok)$('google_client_secret').value='';}
-</script></body></html>"""
 
 def apply_settings(data):
     """Update cfg from a settings dict (web form or API). Restarts mic if changed."""
@@ -1214,9 +979,14 @@ def apply_settings(data):
     if "custom_words" in data:
         raw = data["custom_words"] if isinstance(data["custom_words"], list) else str(data["custom_words"]).split(",")
         cfg["custom_words"] = [str(w).strip() for w in raw if str(w).strip()]
-    for k in ("enable_yt", "enable_notif", "enable_clip", "enable_auto_editor", "smart_trim_silence"):
+    for k in ("enable_yt", "enable_notif", "enable_clip", "enable_auto_editor", "smart_trim_silence", "review_uploads"):
         if k in data:
             cfg[k] = bool(data[k])
+    if "publish_slots" in data:
+        raw = data["publish_slots"] if isinstance(data["publish_slots"], list) else str(data["publish_slots"]).split(",")
+        slots = [s.strip() for s in raw if re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", str(s).strip())]
+        if slots:
+            cfg["publish_slots"] = slots
     if "max_upload_kbps" in data:
         try:
             cfg["max_upload_kbps"] = int(data["max_upload_kbps"])
@@ -1314,13 +1084,16 @@ def dashboard_html():
         "__OBS__": e(cfg["obs_clips_dir"]), "__KBPS__": e(cfg["max_upload_kbps"]),
         "__CID__": e(cfg["google_client_id"]),
         "__SEC_PH__": "•••••• saved" if cfg["google_client_secret"] else "GOCSPX-…",
-        "__YT__": "checked" if cfg["enable_yt"] else "", "__NOTIF__": "checked" if cfg["enable_notif"] else "",
+        "__YT__": "checked" if cfg["enable_yt"] else "",
+        "__REVIEW__": "checked" if cfg.get("review_uploads", True) else "",
+        "__SLOTS__": e(", ".join(cfg["publish_slots"])), "__NOTIF__": "checked" if cfg["enable_notif"] else "",
         "__CLIP__": "checked" if cfg["enable_clip"] else "",
         "__PUB__": "selected" if cfg["yt_privacy"] == "public" else "",
         "__UNL__": "selected" if cfg["yt_privacy"] == "unlisted" else "",
         "__PRV__": "selected" if cfg["yt_privacy"] == "private" else "",
     }
-    page = PAGE
+    with open(os.path.join(HERE, "dashboard.html"), encoding="utf-8") as f:
+        page = f.read()   # read per request: edit the page without restarting
     for k, v in repl.items():
         page = page.replace(k, str(v))
     return page
@@ -1383,6 +1156,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(b"not found", "text/plain", 404)
         elif u.path == "/api/status":
             self._send(json.dumps(status_json()))
+        elif u.path == "/api/queue":
+            self._send(json.dumps([r for r in records if r["status"] != "skipped" or
+                                   time.time() - r["created"] < 86400][-50:][::-1]))
         elif u.path == "/api/history":
             self._send(json.dumps(clip_history[-20:][::-1]))   # newest first
         elif u.path == "/clip":
@@ -1446,6 +1222,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(b'{"status":"saved"}')
             except Exception as ex:
                 self._send(json.dumps({"status": "error", "message": str(ex)}).encode(), code=400)
+        elif path == "/api/queue/update":
+            n = int(self.headers.get("Content-Length", 0))
+            try:
+                self._send(json.dumps(update_record(json.loads(self.rfile.read(n) or b"{}"))))
+            except Exception as ex:
+                self._send(json.dumps({"error": str(ex)}), code=400)
+        elif path == "/api/queue/suggest":
+            threading.Thread(target=suggest_titles, daemon=True).start()
+            self._send(b'{"status":"suggesting"}')
         elif path == "/api/history/clear":
             global clip_history
             clip_history = []
@@ -1571,6 +1356,9 @@ if __name__ == "__main__":
     threading.Thread(target=live_loop, daemon=True).start()
     threading.Thread(target=health_loop, daemon=True).start()
     threading.Thread(target=warmup_whisper, daemon=True).start()
+    threading.Thread(target=_upload_worker, daemon=True).start()
+    threading.Thread(target=retry_loop, daemon=True).start()
+    threading.Thread(target=stats_loop, daemon=True).start()
     print(f"READY — trigger: http://localhost:{HTTP_PORT}/clip")
     app = ClipApp()
     import AppKit  # menu-bar-only: no Dock icon (otherwise Python shows a Dock rocket)

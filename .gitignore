@@ -21,3 +21,5 @@ clips.jsonl
 
 # Local design/scratch archive (not published)
 archive/
+# Clip review queue + upload records (per machine)
+uploads.json*
