@@ -308,7 +308,7 @@ def render_top_banner_png(title, output_path, width=1080, height=1920):
     draw = ImageDraw.Draw(img)
 
     clean_title = re.sub(r'[\r\n\t]+', ' ', title).strip().upper()
-    title_text = f"📌 {clean_title}"
+    title_text = clean_title  # no emoji: SF Pro has no emoji glyphs, PIL drew a tofu box
 
     font = get_spec_font(48)
     words = title_text.split()
